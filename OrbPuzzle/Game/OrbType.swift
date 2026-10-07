@@ -8,6 +8,17 @@ enum OrbType: String, CaseIterable, Codable, Sendable {
     case dark
     case heart
 
+    /// Gameplay resolve order is explicit and must not depend on declaration,
+    /// raw-value, dictionary, or match-detector ordering.
+    static let resolveOrder: [OrbType] = [
+        .water,
+        .fire,
+        .wood,
+        .light,
+        .dark,
+        .heart
+    ]
+
     var displayName: String { rawValue.capitalized }
 }
 

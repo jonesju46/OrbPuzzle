@@ -192,6 +192,116 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(grid.orb(at: GridPosition(row: 4, column: 0)))
     }
 
+    func testResolveOrderPlacesWaterBeforeFireAndDark() {
+        let matches = [
+            makeMatch(type: .fire, group: 0),
+            makeMatch(type: .water, group: 1),
+            makeMatch(type: .dark, group: 2)
+        ]
+
+        XCTAssertEqual(
+            ResolveResult(matches: matches).phases.map(\.type),
+            [.water, .fire, .dark]
+        )
+    }
+
+    func testResolveOrderContainsAllSixGameplayOrbTypes() {
+        let matches = [
+            makeMatch(type: .heart, group: 0),
+            makeMatch(type: .light, group: 1),
+            makeMatch(type: .wood, group: 2),
+            makeMatch(type: .water, group: 3),
+            makeMatch(type: .fire, group: 4),
+            makeMatch(type: .dark, group: 5)
+        ]
+
+        XCTAssertEqual(OrbType.allCases.count, 6)
+        XCTAssertEqual(OrbType.resolveOrder, [.water, .fire, .wood, .light, .dark, .heart])
+        XCTAssertEqual(ResolveResult(matches: matches).phases.map(\.type), OrbType.resolveOrder)
+    }
+
+    func testSameTypeGroupsShareOnePhaseButKeepEveryCombo() {
+        let matches = [
+            makeMatch(type: .heart, group: 0),
+            makeMatch(type: .water, group: 1),
+            makeMatch(type: .fire, group: 2),
+            makeMatch(type: .water, group: 3),
+            makeMatch(type: .heart, group: 4)
+        ]
+        let result = ResolveResult(matches: matches)
+
+        XCTAssertEqual(result.phases.map(\.type), [.water, .fire, .heart])
+        XCTAssertEqual(result.phases.map(\.groupCount), [2, 1, 2])
+        XCTAssertEqual(result.comboCount, 5)
+    }
+
+    func testResolvePipelineRunsGravityAndRefillExactlyOnceAfterAllPhases() {
+        let result = ResolveResult(matches: [
+            makeMatch(type: .heart, group: 0),
+            makeMatch(type: .fire, group: 1),
+            makeMatch(type: .water, group: 2)
+        ])
+        let gravityCount = result.steps.filter {
+            if case .gravity(expectedRemovedOrbCount: _) = $0 { return true }
+            return false
+        }.count
+        let refillCount = result.steps.filter {
+            if case .refill(expectedRefillCount: _) = $0 { return true }
+            return false
+        }.count
+
+        XCTAssertEqual(gravityCount, 1)
+        XCTAssertEqual(refillCount, 1)
+        XCTAssertEqual(result.steps.count, result.phases.count + 2)
+        if case .gravity(expectedRemovedOrbCount: _) = result.steps[result.phases.count] {
+            // Expected: all remove phases finish before the single gravity step.
+        } else {
+            XCTFail("Gravity must follow every ordered remove phase")
+        }
+        if let lastStep = result.steps.last,
+           case .refill(expectedRefillCount: _) = lastStep {
+            // Expected: refill follows gravity exactly once.
+        } else {
+            XCTFail("Refill must be the final resolve step")
+        }
+    }
+
+    func testResolveOrderDoesNotDependOnMatchDetectorInputOrder() {
+        let ordered = [
+            makeMatch(type: .water, group: 0),
+            makeMatch(type: .fire, group: 1),
+            makeMatch(type: .wood, group: 2),
+            makeMatch(type: .dark, group: 3)
+        ]
+        let shuffled = [ordered[3], ordered[1], ordered[0], ordered[2]]
+
+        XCTAssertEqual(
+            ResolveResult(matches: shuffled).phases.map(\.type),
+            [.water, .fire, .wood, .dark]
+        )
+    }
+
+    func testSingleTypeSkyfallMatchUsesTheSameResolvePipeline() {
+        let result = ResolveResult(matches: [makeMatch(type: .wood, group: 0)])
+
+        XCTAssertEqual(result.comboCount, 1)
+        XCTAssertEqual(result.removedOrbCount, 3)
+        XCTAssertEqual(result.phases.map(\.type), [.wood])
+        XCTAssertEqual(result.steps.count, 3)
+        if case let .remove(phase) = result.steps[0] {
+            XCTAssertEqual(phase.type, .wood)
+            XCTAssertEqual(phase.groupCount, 1)
+        } else {
+            XCTFail("Skyfall match must start with its ordered remove phase")
+        }
+        if case .gravity(expectedRemovedOrbCount: _) = result.steps[1] {} else {
+            XCTFail("Gravity step missing")
+        }
+        if case .refill(expectedRefillCount: _) = result.steps[2] {} else {
+            XCTFail("Refill step missing")
+        }
+    }
+
     func testHorizontalThreeRemovesAndRefillsExactlyThree() {
         let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
         assertResolveCounts(grid: grid, combos: 1, removed: 3)
@@ -397,6 +507,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     private func allOrbIDs(in grid: OrbGrid) -> Set<UUID> {
         Set(grid.cells.flatMap { $0 }.compactMap { $0?.id })
+    }
+
+    private func makeMatch(type: OrbType, group: Int) -> MatchResult {
+        MatchResult(
+            type: type,
+            positions: Set((0..<3).map { GridPosition(row: group, column: $0) })
+        )
     }
 }
 

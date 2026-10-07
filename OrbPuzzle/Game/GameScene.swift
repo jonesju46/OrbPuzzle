@@ -278,34 +278,68 @@ final class GameScene: SKScene {
     }
 
     private func process(matches: [MatchResult]) {
-        gameState = .removing
         let resolveResult = ResolveResult(matches: matches)
-        comboController.add(resolveResult.matches)
-        comboController.animate(label: comboLabel)
-        let removed = grid.remove(resolveResult.removedPositions)
-        assert(removed.count == resolveResult.removedOrbCount)
-        for orb in removed {
-            guard let node = orbNodes[orb.id] else { continue }
-            node.run(.group([
-                .fadeOut(withDuration: GameSettings.Tuning.removeDuration),
-                .scale(to: 0.2, duration: GameSettings.Tuning.removeDuration)
-            ]))
-        }
+        execute(resolveResult.steps, at: 0, result: resolveResult)
+    }
 
-        run(after: GameSettings.Tuning.removeDuration) { [weak self] in
-            guard let self else { return }
+    private func execute(
+        _ steps: [ResolveStep],
+        at index: Int,
+        result: ResolveResult
+    ) {
+        guard steps.indices.contains(index) else { return }
+
+        switch steps[index] {
+        case let .remove(phase):
+            gameState = .removing
+            let removed = grid.remove(phase.removedPositions)
+            assert(removed.count == phase.removedOrbCount)
             for orb in removed {
-                self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
+                guard let node = orbNodes[orb.id] else { continue }
+                node.run(.sequence([
+                    .scale(to: 1.12, duration: GameSettings.Tuning.resolveHighlightDuration),
+                    .group([
+                        .fadeOut(withDuration: GameSettings.Tuning.removeDuration),
+                        .scale(to: 0.2, duration: GameSettings.Tuning.removeDuration)
+                    ])
+                ]))
             }
-            self.gameState = .falling
-            let fallDuration = self.gravityController.apply(
-                to: self.grid,
-                nodes: self.orbNodes,
+
+            let phaseDuration = GameSettings.Tuning.resolveHighlightDuration
+                + GameSettings.Tuning.removeDuration
+            run(after: phaseDuration) { [weak self] in
+                guard let self else { return }
+                for orb in removed {
+                    self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
+                }
+                self.comboController.add(phase.matches)
+                self.comboController.animate(label: self.comboLabel)
+#if DEBUG
+                print("[RESOLVE] phase=\(phase.type.rawValue) groups=\(phase.groupCount)")
+#endif
+                self.run(after: GameSettings.Tuning.resolvePhaseDelay) { [weak self] in
+                    self?.execute(steps, at: index + 1, result: result)
+                }
+            }
+
+        case let .gravity(expectedRemovedOrbCount: expectedRemovedOrbCount):
+            assert(grid.emptyPositions().count == expectedRemovedOrbCount)
+            assert(comboController.comboCount == result.comboCount)
+            gameState = .falling
+#if DEBUG
+            print("[RESOLVE] gravity removed=\(expectedRemovedOrbCount)")
+#endif
+            let fallDuration = gravityController.apply(
+                to: grid,
+                nodes: orbNodes,
                 pointForPosition: { self.point(for: $0) }
             )
-            self.run(after: fallDuration) { [weak self] in
-                self?.refillAndContinue(expectedRefillCount: resolveResult.removedOrbCount)
+            run(after: fallDuration) { [weak self] in
+                self?.execute(steps, at: index + 1, result: result)
             }
+
+        case let .refill(expectedRefillCount: expectedRefillCount):
+            refillAndContinue(expectedRefillCount: expectedRefillCount)
         }
     }
 
