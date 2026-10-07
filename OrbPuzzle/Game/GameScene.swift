@@ -23,6 +23,7 @@ final class GameScene: SKScene {
     private var gameState: GameState = .idle { didSet { updateDebugOverlay() } }
     private var dropMode: DropMode = .normal
     private var configuredCascadeRounds = GameSettings.defaultCascadeRounds
+    private var targetCombo = GameSettings.defaultTargetCombo
     private var lastUpdateTime: TimeInterval = 0
     private var forcedEndInProgress = false
 #if DEBUG
@@ -38,10 +39,14 @@ final class GameScene: SKScene {
     @available(*, unavailable)
     required init?(coder aDecoder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(turnDuration: Double, cascadeRounds: Int, dropMode: DropMode) {
+    func configure(turnDuration: Double, cascadeRounds: Int, dropMode: DropMode, targetCombo: Int) {
         turnController.duration = turnDuration
         configuredCascadeRounds = min(max(cascadeRounds, 1), 99)
         self.dropMode = dropMode
+        self.targetCombo = min(max(targetCombo, 1), 99)
+        if comboController.comboCount == 0 {
+            comboLabel.text = "0 Combo / Target \(self.targetCombo)"
+        }
         updateDebugOverlay()
     }
 
@@ -68,7 +73,7 @@ final class GameScene: SKScene {
 
         comboLabel.fontSize = 28
         comboLabel.horizontalAlignmentMode = .left
-        comboLabel.text = "0 Combo"
+        comboLabel.text = "0 Combo / Target \(targetCombo)"
         addChild(comboLabel)
 
         timerLabel.fontSize = 16
@@ -158,10 +163,11 @@ final class GameScene: SKScene {
     }
 
     private func gridPosition(at point: CGPoint) -> GridPosition? {
-        guard boardFrame.contains(point) else { return nil }
-        return GridPosition(
-            row: min(Int((point.y - boardFrame.minY) / cellSize.height), grid.rows - 1),
-            column: min(Int((point.x - boardFrame.minX) / cellSize.width), grid.columns - 1)
+        TurnController.gridPosition(
+            for: point,
+            boardFrame: boardFrame,
+            rows: grid.rows,
+            columns: grid.columns
         )
     }
 
@@ -173,6 +179,9 @@ final class GameScene: SKScene {
         turnController.select(orbID: orb.id, at: position, touchPosition: location)
         node.zPosition = 50
         node.run(.scale(to: 1.10, duration: 0.06))
+#if DEBUG
+        print("[INPUT] began row=\(position.row) col=\(position.column)")
+#endif
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -202,8 +211,8 @@ final class GameScene: SKScene {
                   grid.swap(current, destination) else { continue }
             if !turnController.isTiming {
                 turnController.beginTiming(at: lastUpdateTime)
-                gameState = .dragging
             }
+            gameState = .dragging
             let displacedNode = orbNodes[displacedOrb.id]
             displacedNode?.removeAction(forKey: "swap")
             displacedNode?.run(.move(to: point(for: current), duration: GameSettings.Tuning.swapDuration), withKey: "swap")
@@ -212,12 +221,18 @@ final class GameScene: SKScene {
         turnController.rememberTouch(clamped)
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endTurn() }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { endTurn() }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endGesture(cancelled: false) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { endGesture(cancelled: true) }
 
-    private func endTurn() {
+    private func endGesture(cancelled: Bool) {
         guard gameState == .selected || gameState == .dragging else { return }
-        let hadMovement = turnController.isTiming
+#if DEBUG
+        if let position = turnController.currentPosition {
+            print("[INPUT] \(cancelled ? "cancelled" : "ended") row=\(position.row) col=\(position.column)")
+        } else {
+            print("[INPUT] \(cancelled ? "cancelled" : "ended") outside-board")
+        }
+#endif
         if let id = turnController.selectedOrbID, let position = turnController.currentPosition, let node = orbNodes[id] {
             node.zPosition = 0
             node.run(.group([
@@ -225,24 +240,37 @@ final class GameScene: SKScene {
                 .scale(to: 1.0, duration: 0.07)
             ]))
         }
-        turnController.finish()
-        forcedEndInProgress = false
+        turnController.endGesture()
         updateTimerUI()
-        if hadMovement {
-            resolveTurn()
-        } else {
-            gameState = .idle
+        // Finger-up ends only this drag. The board and timer remain live until expiry.
+        gameState = .idle
+    }
+
+    private func expireTurnSession() {
+        guard !forcedEndInProgress else { return }
+        forcedEndInProgress = true
+        gameState = .resolving
+        if let id = turnController.selectedOrbID,
+           let position = turnController.currentPosition,
+           let node = orbNodes[id] {
+            node.zPosition = 0
+            node.removeAllActions()
+            node.position = point(for: position)
+            node.setScale(1)
         }
+        turnController.expireSession()
+        updateTimerUI()
+        resolveTurn()
     }
 
     private func resolveTurn() {
         gameState = .resolving
         comboController.reset()
         cascadeController.reset(maximumRounds: configuredCascadeRounds)
-        comboLabel.text = "0 Combo"
+        comboLabel.text = "0 Combo / Target \(targetCombo)"
         let initialMatches = matchDetector.detect(in: grid)
         guard !initialMatches.isEmpty else {
-            gameState = .idle
+            finishResolution()
             return
         }
         process(matches: initialMatches)
@@ -251,7 +279,7 @@ final class GameScene: SKScene {
     private func process(matches: [MatchResult]) {
         gameState = .removing
         comboController.add(matches)
-        comboController.animate(label: comboLabel)
+        comboController.animate(label: comboLabel, target: targetCombo)
         let positions = matches.reduce(into: Set<GridPosition>()) { $0.formUnion($1.positions) }
         let removed = grid.remove(positions)
         for orb in removed {
@@ -292,17 +320,24 @@ final class GameScene: SKScene {
         run(after: result.duration) { [weak self] in
             guard let self else { return }
             guard self.cascadeController.beginNextRound() else {
-                self.gameState = .idle
+                self.finishResolution()
                 return
             }
             self.gameState = .cascading
             let matches = self.matchDetector.detect(in: self.grid)
             guard !matches.isEmpty else {
-                self.gameState = .idle
+                self.finishResolution()
                 return
             }
             self.process(matches: matches)
         }
+    }
+
+    private func finishResolution() {
+        forcedEndInProgress = false
+        turnController.resetSession()
+        gameState = .idle
+        updateTimerUI()
     }
 
     private func run(after delay: TimeInterval, completion: @escaping () -> Void) {
@@ -318,11 +353,8 @@ final class GameScene: SKScene {
         }
 #endif
         lastUpdateTime = currentTime
-        if gameState == .dragging, turnController.update(at: currentTime) {
-            if !forcedEndInProgress {
-                forcedEndInProgress = true
-                endTurn()
-            }
+        if turnController.isTiming, turnController.update(at: currentTime) {
+            expireTurnSession()
         }
         updateTimerUI()
         updateDebugOverlay()

@@ -12,13 +12,16 @@ enum GameSettings {
     static let turnDurationKey = "turnDuration"
     static let cascadeRoundsKey = "cascadeRounds"
     static let dropModeKey = "dropMode"
+    static let targetComboKey = "targetCombo"
 
     static let defaultTurnDuration = 10.0
     static let defaultCascadeRounds = 10
     static let defaultDropMode = DropMode.normal.rawValue
+    static let defaultTargetCombo = 10
 
-    static let turnDurationRange = 5.0...20.0
+    static let turnDurationRange = 5.0...99.0
     static let cascadeRoundsRange = 1...99
+    static let targetComboRange = 1...99
 
     enum Tuning {
         static let highComboWeightMultiplier = 4

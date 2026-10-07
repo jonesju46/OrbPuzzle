@@ -112,7 +112,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
     }
 
     func testTimerStartsExplicitlyAndClamps() {
-        for duration in [5.0, 10.0, 20.0] {
+        for duration in [5.0, 10.0, 20.0, 99.0] {
             let timer = TurnController(duration: duration)
             timer.select(orbID: UUID(), at: GridPosition(row: 0, column: 0), touchPosition: .zero)
             XCTAssertFalse(timer.isTiming)
@@ -123,6 +123,52 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertTrue(timer.update(at: 101 + duration))
             XCTAssertEqual(timer.remainingTime, 0)
             XCTAssertEqual(timer.progress, 0)
+        }
+    }
+
+    func testFingerUpKeepsTimedSessionAliveUntilExpiry() {
+        let timer = TurnController(duration: 10)
+        timer.select(orbID: UUID(), at: GridPosition(row: 0, column: 0), touchPosition: .zero)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 102))
+        timer.endGesture()
+        XCTAssertTrue(timer.isTiming)
+        XCTAssertFalse(timer.hasActiveGesture)
+        XCTAssertEqual(timer.remainingTime, 8, accuracy: 0.001)
+
+        timer.select(orbID: UUID(), at: GridPosition(row: 4, column: 5), touchPosition: .zero)
+        XCTAssertTrue(timer.isTiming)
+        XCTAssertFalse(timer.update(at: 105))
+        XCTAssertEqual(timer.remainingTime, 5, accuracy: 0.001)
+        XCTAssertTrue(timer.update(at: 111))
+        timer.expireSession()
+        XCTAssertEqual(timer.remainingTime, 0)
+        XCTAssertFalse(timer.isTiming)
+
+        timer.resetSession()
+        XCTAssertEqual(timer.remainingTime, 10)
+    }
+
+    func testEveryLeftAndRightEdgeOrbMapsInsideBoard() {
+        let frame = CGRect(x: 14, y: 100, width: 600, height: 500)
+        let cellWidth = frame.width / 6
+        let cellHeight = frame.height / 5
+        for row in 0..<5 {
+            let y = frame.minY + (CGFloat(row) + 0.5) * cellHeight
+            let left = TurnController.gridPosition(
+                for: CGPoint(x: frame.minX + cellWidth * 0.5, y: y),
+                boardFrame: frame,
+                rows: 5,
+                columns: 6
+            )
+            let right = TurnController.gridPosition(
+                for: CGPoint(x: frame.maxX - cellWidth * 0.5, y: y),
+                boardFrame: frame,
+                rows: 5,
+                columns: 6
+            )
+            XCTAssertEqual(left, GridPosition(row: row, column: 0))
+            XCTAssertEqual(right, GridPosition(row: row, column: 5))
         }
     }
 

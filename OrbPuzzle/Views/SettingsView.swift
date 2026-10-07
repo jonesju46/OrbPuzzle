@@ -4,6 +4,7 @@ struct SettingsView: View {
     @AppStorage(GameSettings.turnDurationKey) private var turnDuration = GameSettings.defaultTurnDuration
     @AppStorage(GameSettings.cascadeRoundsKey) private var cascadeRounds = GameSettings.defaultCascadeRounds
     @AppStorage(GameSettings.dropModeKey) private var dropModeRaw = GameSettings.defaultDropMode
+    @AppStorage(GameSettings.targetComboKey) private var targetCombo = GameSettings.defaultTargetCombo
 
     var body: some View {
         Form {
@@ -13,6 +14,17 @@ struct SettingsView: View {
                         Text("Duration")
                         Spacer()
                         Text("\(Int(turnDuration)) seconds")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("Target Combo") {
+                Stepper(value: $targetCombo, in: GameSettings.targetComboRange, step: 1) {
+                    HStack {
+                        Text("Goal")
+                        Spacer()
+                        Text("\(targetCombo)")
                             .foregroundStyle(.secondary)
                     }
                 }

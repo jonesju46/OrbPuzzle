@@ -16,6 +16,7 @@ final class TurnController {
     }
 
     var isTiming: Bool { turnStartTime != nil }
+    var hasActiveGesture: Bool { selectedOrbID != nil }
     var progress: Double { duration > 0 ? min(max(remainingTime / duration, 0), 1) : 0 }
 
     init(duration: TimeInterval) {
@@ -27,8 +28,9 @@ final class TurnController {
         selectedOrbID = orbID
         currentPosition = gridPosition
         previousTouchPosition = touchPosition
-        turnStartTime = nil
-        remainingTime = duration
+        if turnStartTime == nil, remainingTime > 0 {
+            remainingTime = duration
+        }
     }
 
     func beginTiming(at currentTime: TimeInterval) {
@@ -52,12 +54,41 @@ final class TurnController {
         previousTouchPosition = point
     }
 
-    func finish() {
+    /// Ends only the current finger gesture. An active timed session continues.
+    func endGesture() {
         selectedOrbID = nil
         currentPosition = nil
         previousTouchPosition = nil
+    }
+
+    /// Locks an expired session at zero while match resolution is running.
+    func expireSession() {
+        endGesture()
+        turnStartTime = nil
+        remainingTime = 0
+    }
+
+    /// Prepares a fresh session after resolution has fully completed.
+    func resetSession() {
+        endGesture()
         turnStartTime = nil
         remainingTime = duration
+    }
+
+    static func gridPosition(
+        for point: CGPoint,
+        boardFrame: CGRect,
+        rows: Int,
+        columns: Int
+    ) -> GridPosition? {
+        guard rows > 0, columns > 0, boardFrame.width > 0, boardFrame.height > 0,
+              boardFrame.contains(point) else { return nil }
+        let cellWidth = boardFrame.width / CGFloat(columns)
+        let cellHeight = boardFrame.height / CGFloat(rows)
+        return GridPosition(
+            row: min(max(Int((point.y - boardFrame.minY) / cellHeight), 0), rows - 1),
+            column: min(max(Int((point.x - boardFrame.minX) / cellWidth), 0), columns - 1)
+        )
     }
 
     /// Returns every board cell crossed by a segment, in order. Exact corner crossings
@@ -73,19 +104,12 @@ final class TurnController {
         let cellWidth = boardFrame.width / CGFloat(columns)
         let cellHeight = boardFrame.height / CGFloat(rows)
 
-        func cell(for point: CGPoint) -> GridPosition? {
-            guard boardFrame.contains(point) || point == CGPoint(x: boardFrame.maxX, y: boardFrame.maxY) else { return nil }
-            let column = min(max(Int((point.x - boardFrame.minX) / cellWidth), 0), columns - 1)
-            let row = min(max(Int((point.y - boardFrame.minY) / cellHeight), 0), rows - 1)
-            return GridPosition(row: row, column: column)
-        }
-
-        guard var current = cell(for: start) else { return [] }
+        guard var current = gridPosition(for: start, boardFrame: boardFrame, rows: rows, columns: columns) else { return [] }
         let clampedEnd = CGPoint(
             x: min(max(end.x, boardFrame.minX.nextUp), boardFrame.maxX.nextDown),
             y: min(max(end.y, boardFrame.minY.nextUp), boardFrame.maxY.nextDown)
         )
-        guard let target = cell(for: clampedEnd) else { return [current] }
+        guard let target = gridPosition(for: clampedEnd, boardFrame: boardFrame, rows: rows, columns: columns) else { return [current] }
         var result = [current]
         if current == target { return result }
         // If one touch sample moves directly into any neighboring cell, preserve that

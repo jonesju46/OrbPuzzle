@@ -7,12 +7,15 @@ An independent SwiftUI + SpriteKit iOS project implementing the core 6×5 orb en
 - 6 columns × 5 rows, six orb types, model/render separation
 - Eight-direction swaps including direct diagonal movement
 - Segment-to-grid traversal so fast horizontal, vertical, and diagonal drags do not skip cells
-- Turn countdown based on elapsed scene time; it starts on the first valid swap
+- 5–99 second countdown based on elapsed scene time; it starts on the first valid swap
+- Finger-up ends only the current drag; the timed session and board remain active until zero
 - Horizontal/vertical 3+ matching with connected-group combo counting and 5+ flags
 - Non-blocking SpriteKit remove, gravity, refill, swap, and combo animations
 - Normal independent RNG and weighted High Combo RNG
 - Configurable 1–99 cascade rounds with early stop on no match
 - Persistent turn time, cascade rounds, and drop mode through `@AppStorage`
+- Persistent 1–99 target combo with HUD display
+- Gameplay-only interactive-pop suppression, an exact 44×44 Settings button, and no gameplay overlay hit targets
 - Debug-only FPS, state, time, combo, cascade, and mode overlay
 - XCTest coverage for matching, movement, traversal, timer, gravity, board generation, and cascade bounds
 
