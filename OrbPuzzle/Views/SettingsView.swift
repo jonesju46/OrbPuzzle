@@ -2,9 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(GameSettings.turnDurationKey) private var turnDuration = GameSettings.defaultTurnDuration
-    @AppStorage(GameSettings.cascadeRoundsKey) private var cascadeRounds = GameSettings.defaultCascadeRounds
-    @AppStorage(GameSettings.dropModeKey) private var dropModeRaw = GameSettings.defaultDropMode
-    @AppStorage(GameSettings.targetComboKey) private var targetCombo = GameSettings.defaultTargetCombo
+    @AppStorage(GameSettings.noResolveDuringTurnKey) private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
+    @AppStorage(GameSettings.skyfallComboCountKey) private var skyfallComboCount = GameSettings.defaultSkyfallComboCount
 
     var body: some View {
         Form {
@@ -19,41 +18,25 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Target Combo") {
-                Stepper(value: $targetCombo, in: GameSettings.targetComboRange, step: 1) {
-                    HStack {
-                        Text("Goal")
-                        Spacer()
-                        Text("\(targetCombo)")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Section("Drop Mode") {
-                Picker("Mode", selection: $dropModeRaw) {
-                    ForEach(DropMode.allCases) { mode in
-                        Text(mode.title).tag(mode.rawValue)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Text(dropModeRaw == DropMode.highCombo.rawValue
-                     ? "Weighted RNG raises the chance of skyfall matches."
-                     : "Each new orb uses independent, equal-probability RNG.")
+            Section("Turn Resolution") {
+                Toggle("No Resolve During Turn", isOn: $noResolveDuringTurn)
+                Text(noResolveDuringTurn
+                     ? "Finger-up keeps the board and timer active. Resolution starts at zero."
+                     : "Finger-up resolves immediately after the first valid move.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Cascade Rounds") {
-                Stepper(value: $cascadeRounds, in: GameSettings.cascadeRoundsRange, step: 1) {
+            Section("Skyfall Combo") {
+                Stepper(value: $skyfallComboCount, in: GameSettings.skyfallComboCountRange, step: 1) {
                     HStack {
-                        Text("Maximum")
+                        Text("Guaranteed")
                         Spacer()
-                        Text("\(cascadeRounds)")
+                        Text("\(skyfallComboCount)")
                             .foregroundStyle(.secondary)
                     }
                 }
-                Text("Initial matches do not count. Resolution stops early when a round has no match.")
+                Text("This is the exact number of additional match groups generated after the initial matches.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

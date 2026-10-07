@@ -11,9 +11,9 @@ final class ComboController {
         return comboCount
     }
 
-    func animate(label: SKLabelNode, target: Int) {
+    func animate(label: SKLabelNode) {
         label.removeAllActions()
-        label.text = "\(comboCount) Combo / Target \(target)"
+        label.text = "Combo \(comboCount)"
         label.setScale(0.75)
         label.alpha = 1
         label.run(.sequence([

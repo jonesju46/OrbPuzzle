@@ -1,30 +1,18 @@
 import Foundation
 
-enum DropMode: String, CaseIterable, Identifiable {
-    case normal
-    case highCombo
-
-    var id: String { rawValue }
-    var title: String { self == .normal ? "Normal" : "High Combo" }
-}
-
 enum GameSettings {
     static let turnDurationKey = "turnDuration"
-    static let cascadeRoundsKey = "cascadeRounds"
-    static let dropModeKey = "dropMode"
-    static let targetComboKey = "targetCombo"
+    static let noResolveDuringTurnKey = "noResolveDuringTurn"
+    static let skyfallComboCountKey = "skyfallComboCount"
 
     static let defaultTurnDuration = 10.0
-    static let defaultCascadeRounds = 10
-    static let defaultDropMode = DropMode.normal.rawValue
-    static let defaultTargetCombo = 10
+    static let defaultNoResolveDuringTurn = true
+    static let defaultSkyfallComboCount = 15
 
     static let turnDurationRange = 5.0...99.0
-    static let cascadeRoundsRange = 1...99
-    static let targetComboRange = 1...99
+    static let skyfallComboCountRange = 1...99
 
     enum Tuning {
-        static let highComboWeightMultiplier = 4
         static let swapDuration = 0.08
         static let removeDuration = 0.18
         static let fallDuration = 0.20

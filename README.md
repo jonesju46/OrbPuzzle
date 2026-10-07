@@ -8,16 +8,16 @@ An independent SwiftUI + SpriteKit iOS project implementing the core 6×5 orb en
 - Eight-direction swaps including direct diagonal movement
 - Segment-to-grid traversal so fast horizontal, vertical, and diagonal drags do not skip cells
 - 5–99 second countdown based on elapsed scene time; it starts on the first valid swap
-- Finger-up ends only the current drag; the timed session and board remain active until zero
+- Configurable finger-up policy: keep playing until zero or resolve immediately
 - Horizontal/vertical 3+ matching with connected-group combo counting and 5+ flags
 - Non-blocking SpriteKit remove, gravity, refill, swap, and combo animations
-- Normal independent RNG and weighted High Combo RNG
-- Configurable 1–99 cascade rounds with early stop on no match
-- Persistent turn time, cascade rounds, and drop mode through `@AppStorage`
-- Persistent 1–99 target combo with HUD display
+- Exact 1–99 guaranteed skyfall combos using controlled, visible refill boards
+- Up to ten disconnected match groups per non-blocking skyfall batch
+- Final controlled refill contains no immediate match, preventing combo overshoot
+- Persistent turn time, no-resolve policy, and skyfall count through `@AppStorage`
 - Gameplay-only interactive-pop suppression, an exact 44×44 Settings button, and no gameplay overlay hit targets
-- Debug-only FPS, state, time, combo, cascade, and mode overlay
-- XCTest coverage for matching, movement, traversal, timer, gravity, board generation, and cascade bounds
+- Debug-only FPS, state, time, total combo, and skyfall progress overlay
+- XCTest coverage for exact 0–10 group boards and guaranteed totals through 99 skyfall combos
 
 ## Architecture
 
@@ -25,4 +25,4 @@ Gameplay rendering and animation live in SpriteKit. `OrbGrid` is the source of t
 
 ## Build status
 
-The project targets iOS 17. Windows cannot run Xcode or an iOS simulator, so the local iOS build and 60 FPS device runtime are **not verified**. Codemagic is intentionally not configured or run.
+The project targets iOS 17. Windows cannot run Xcode or an iOS simulator, so the local iOS build and 60 FPS device runtime are **not verified**. Codemagic was not run as part of this implementation.

@@ -185,12 +185,56 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(grid.orb(at: GridPosition(row: 4, column: 0)))
     }
 
-    func testCascadeBoundsAtOneTenThirtyAndNinetyNine() {
-        for maximum in [1, 10, 30, 99] {
-            let controller = CascadeController(maximumRounds: maximum)
-            var count = 0
-            while controller.beginNextRound() { count += 1 }
-            XCTAssertEqual(count, maximum)
+    func testControlledSkyfallBoardsContainExactMatchGroupCount() {
+        for expected in 0...SkyfallController.maximumGroupsPerBoard {
+            let types = SkyfallController.makeBoardTypes(matchGroupCount: expected)
+            XCTAssertEqual(MatchDetector().detect(in: OrbGrid(types: types)).count, expected)
+        }
+    }
+
+    func testGuaranteedSkyfallCountsIncludingNinetyNine() {
+        for requested in [1, 10, 15, 99] {
+            let controller = SkyfallController()
+            controller.reset(requestedCombos: requested)
+            var batchCount = 0
+            while !controller.isComplete {
+                let expectedBatch = controller.nextBatchSize()
+                let board = OrbGrid(types: SkyfallController.makeBoardTypes(matchGroupCount: expectedBatch))
+                let actualBatch = MatchDetector().detect(in: board).count
+                XCTAssertEqual(actualBatch, expectedBatch)
+                XCTAssertTrue(controller.recordGenerated(actualBatch))
+                batchCount += 1
+                XCTAssertLessThanOrEqual(batchCount, 10)
+            }
+            XCTAssertEqual(controller.generatedCombos, requested)
+            XCTAssertEqual(controller.remainingCombos, 0)
+        }
+    }
+
+    func testSkyfallControllerRejectsOvershoot() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 15)
+        XCTAssertTrue(controller.recordGenerated(13))
+        XCTAssertFalse(controller.recordGenerated(3))
+        XCTAssertEqual(controller.generatedCombos, 13)
+        XCTAssertEqual(controller.nextBatchSize(), 2)
+        XCTAssertTrue(controller.recordGenerated(2))
+        XCTAssertEqual(controller.generatedCombos, 15)
+    }
+
+    func testInitialPlusSkyfallExamplesHaveNoComboCap() {
+        for (initial, skyfall, expectedTotal) in [
+            (3, 1, 4),
+            (4, 10, 14),
+            (2, 15, 17),
+            (5, 99, 104)
+        ] {
+            let controller = SkyfallController()
+            controller.reset(requestedCombos: skyfall)
+            while !controller.isComplete {
+                XCTAssertTrue(controller.recordGenerated(controller.nextBatchSize()))
+            }
+            XCTAssertEqual(initial + controller.generatedCombos, expectedTotal)
         }
     }
 }

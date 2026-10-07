@@ -118,4 +118,23 @@ final class OrbGrid {
         }
         return spawns
     }
+
+    /// Replaces the board with newly generated skyfall orbs. Every returned orb has
+    /// a source row above the board so SpriteKit renders an actual refill animation.
+    func replaceAll(with types: [[OrbType]]) -> [OrbSpawn] {
+        precondition(types.count == rows && types.allSatisfy { $0.count == columns })
+        var spawns: [OrbSpawn] = []
+        for row in 0..<rows {
+            for column in 0..<columns {
+                let orb = Orb(type: types[row][column])
+                cells[row][column] = orb
+                spawns.append(OrbSpawn(
+                    orb: orb,
+                    destination: GridPosition(row: row, column: column),
+                    sourceRow: rows + row
+                ))
+            }
+        }
+        return spawns
+    }
 }

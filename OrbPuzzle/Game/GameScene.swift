@@ -7,8 +7,8 @@ final class GameScene: SKScene {
     private let gravityController = GravityController()
     private let refillController = RefillController()
     private let comboController = ComboController()
+    private let skyfallController = SkyfallController()
     private lazy var turnController = TurnController(duration: GameSettings.defaultTurnDuration)
-    private lazy var cascadeController = CascadeController(maximumRounds: GameSettings.defaultCascadeRounds)
 
     private let boardNode = SKNode()
     private let boardBackground = SKShapeNode()
@@ -21,9 +21,8 @@ final class GameScene: SKScene {
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
     private var gameState: GameState = .idle { didSet { updateDebugOverlay() } }
-    private var dropMode: DropMode = .normal
-    private var configuredCascadeRounds = GameSettings.defaultCascadeRounds
-    private var targetCombo = GameSettings.defaultTargetCombo
+    private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
+    private var requestedSkyfallCombos = GameSettings.defaultSkyfallComboCount
     private var lastUpdateTime: TimeInterval = 0
     private var forcedEndInProgress = false
 #if DEBUG
@@ -39,14 +38,10 @@ final class GameScene: SKScene {
     @available(*, unavailable)
     required init?(coder aDecoder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(turnDuration: Double, cascadeRounds: Int, dropMode: DropMode, targetCombo: Int) {
+    func configure(turnDuration: Double, noResolveDuringTurn: Bool, skyfallComboCount: Int) {
         turnController.duration = turnDuration
-        configuredCascadeRounds = min(max(cascadeRounds, 1), 99)
-        self.dropMode = dropMode
-        self.targetCombo = min(max(targetCombo, 1), 99)
-        if comboController.comboCount == 0 {
-            comboLabel.text = "0 Combo / Target \(self.targetCombo)"
-        }
+        self.noResolveDuringTurn = noResolveDuringTurn
+        requestedSkyfallCombos = min(max(skyfallComboCount, 1), 99)
         updateDebugOverlay()
     }
 
@@ -73,7 +68,7 @@ final class GameScene: SKScene {
 
         comboLabel.fontSize = 28
         comboLabel.horizontalAlignmentMode = .left
-        comboLabel.text = "0 Combo / Target \(targetCombo)"
+        comboLabel.text = "Combo 0"
         addChild(comboLabel)
 
         timerLabel.fontSize = 16
@@ -242,8 +237,12 @@ final class GameScene: SKScene {
         }
         turnController.endGesture()
         updateTimerUI()
-        // Finger-up ends only this drag. The board and timer remain live until expiry.
-        gameState = .idle
+        if noResolveDuringTurn || !turnController.isTiming {
+            // Finger-up ends only this drag. The board and timer remain live until expiry.
+            gameState = .idle
+        } else {
+            expireTurnSession()
+        }
     }
 
     private func expireTurnSession() {
@@ -266,11 +265,11 @@ final class GameScene: SKScene {
     private func resolveTurn() {
         gameState = .resolving
         comboController.reset()
-        cascadeController.reset(maximumRounds: configuredCascadeRounds)
-        comboLabel.text = "0 Combo / Target \(targetCombo)"
+        skyfallController.reset(requestedCombos: requestedSkyfallCombos)
+        comboLabel.text = "Combo 0"
         let initialMatches = matchDetector.detect(in: grid)
         guard !initialMatches.isEmpty else {
-            finishResolution()
+            refillAndContinue()
             return
         }
         process(matches: initialMatches)
@@ -279,7 +278,7 @@ final class GameScene: SKScene {
     private func process(matches: [MatchResult]) {
         gameState = .removing
         comboController.add(matches)
-        comboController.animate(label: comboLabel, target: targetCombo)
+        comboController.animate(label: comboLabel)
         let positions = matches.reduce(into: Set<GridPosition>()) { $0.formUnion($1.positions) }
         let removed = grid.remove(positions)
         for orb in removed {
@@ -307,9 +306,20 @@ final class GameScene: SKScene {
 
     private func refillAndContinue() {
         gameState = .refilling
-        let result = refillController.refill(
+        let batchSize = skyfallController.nextBatchSize()
+        let boardTypes = SkyfallController.makeBoardTypes(matchGroupCount: batchSize)
+
+        // Guaranteed skyfall uses a complete controlled refill. Every orb is a new
+        // falling node, so the requested combos are produced by real board matches.
+        for node in orbNodes.values {
+            node.removeAllActions()
+            node.removeFromParent()
+        }
+        orbNodes.removeAll(keepingCapacity: true)
+
+        let result = refillController.refillWithControlledBoard(
             grid: grid,
-            mode: dropMode,
+            types: boardTypes,
             boardNode: boardNode,
             cellSize: cellSize,
             pointForPosition: { [weak self] position in
@@ -319,13 +329,22 @@ final class GameScene: SKScene {
         for node in result.nodes { orbNodes[node.orbID] = node }
         run(after: result.duration) { [weak self] in
             guard let self else { return }
-            guard self.cascadeController.beginNextRound() else {
+            let matches = self.matchDetector.detect(in: self.grid)
+
+            if batchSize == 0 {
+                guard matches.isEmpty else {
+                    assertionFailure("Final controlled refill must not contain a match")
+                    self.finishResolution()
+                    return
+                }
                 self.finishResolution()
                 return
             }
+
             self.gameState = .cascading
-            let matches = self.matchDetector.detect(in: self.grid)
-            guard !matches.isEmpty else {
+            guard matches.count == batchSize,
+                  self.skyfallController.recordGenerated(matches.count) else {
+                assertionFailure("Controlled skyfall generated \(matches.count), expected \(batchSize)")
                 self.finishResolution()
                 return
             }
@@ -376,8 +395,8 @@ final class GameScene: SKScene {
         debugLabels[1].text = "State \(gameState.rawValue)"
         debugLabels[2].text = String(format: "Time %.1f", turnController.remainingTime)
         debugLabels[3].text = "Combo \(comboController.comboCount)"
-        debugLabels[4].text = "Cascade \(cascadeController.completedRounds)/\(configuredCascadeRounds)"
-        debugLabels[5].text = "Drop \(dropMode.title)"
+        debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
+        debugLabels[5].text = noResolveDuringTurn ? "Resolve at zero" : "Resolve on lift"
 #endif
     }
 }
