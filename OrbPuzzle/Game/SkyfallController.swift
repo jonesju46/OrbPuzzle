@@ -1,6 +1,7 @@
 import Foundation
 
-/// Advances guaranteed skyfall one visible match cycle at a time.
+/// Plans only the types for real empty refill slots. Existing Orb models are never
+/// replaced, so every skyfall cycle preserves all non-removed IDs and types.
 final class SkyfallController {
     private(set) var requestedCombos = GameSettings.defaultSkyfallComboCount
     private(set) var generatedCombos = 0
@@ -14,7 +15,6 @@ final class SkyfallController {
         generatedCombos = 0
     }
 
-    /// A controlled cycle is valid only when MatchDetector found exactly one group.
     @discardableResult
     func recordCycle(matchGroupCount: Int) -> Bool {
         guard needsAnotherCycle, matchGroupCount == 1 else { return false }
@@ -22,79 +22,140 @@ final class SkyfallController {
         return true
     }
 
-    static func makeSingleMatchBoardTypes() -> [[OrbType]] {
+    func makeControlledRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
         var generator = SystemRandomNumberGenerator()
-        return makeSingleMatchBoardTypes(using: &generator)
+        return makeControlledRefill(grid: grid, refillSlots: refillSlots, using: &generator)
     }
 
-    static func makeSafeBoardTypes() -> [[OrbType]] {
+    func makeSafeRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
         var generator = SystemRandomNumberGenerator()
-        return makeSafeBoardTypes(using: &generator)
+        return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
     }
 
-    static func makeSingleMatchBoardTypes<R: RandomNumberGenerator>(using generator: inout R) -> [[OrbType]] {
-        let detector = MatchDetector()
+    func makeControlledRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        using generator: inout R
+    ) -> [OrbType]? {
+        guard refillSlots == grid.emptyPositions(), refillSlots.count >= 3 else { return nil }
+        let candidates = tripleCandidates(in: Set(refillSlots)).shuffled(using: &generator)
 
-        // Bounded retries prevent generation work from stalling the main thread.
-        for _ in 0..<64 {
-            var board = makeSafeBoardTypes(using: &generator)
-            let horizontal = Bool.random(using: &generator)
-            let maximumLength = horizontal ? min(5, OrbGrid.defaultColumns) : min(5, OrbGrid.defaultRows)
-            let length = Int.random(in: 3...maximumLength, using: &generator)
-            let type = OrbType.allCases.randomElement(using: &generator) ?? .fire
-
-            if horizontal {
-                let row = Int.random(in: 0..<OrbGrid.defaultRows, using: &generator)
-                let start = Int.random(in: 0...(OrbGrid.defaultColumns - length), using: &generator)
-                for column in start..<(start + length) { board[row][column] = type }
-            } else {
-                let column = Int.random(in: 0..<OrbGrid.defaultColumns, using: &generator)
-                let start = Int.random(in: 0...(OrbGrid.defaultRows - length), using: &generator)
-                for row in start..<(start + length) { board[row][column] = type }
-            }
-
-            let matches = detector.detect(in: OrbGrid(types: board))
-            if matches.count == 1, matches[0].count == length { return board }
-        }
-
-        // Deterministic fallback: exactly one horizontal three-match.
-        var fallback = deterministicSafeBoardTypes()
-        let type = OrbType.allCases.last ?? .heart
-        for column in 0..<3 { fallback[0][column] = type }
-        return fallback
-    }
-
-    static func makeSafeBoardTypes<R: RandomNumberGenerator>(using generator: inout R) -> [[OrbType]] {
-        var board = Array(
-            repeating: Array(repeating: OrbType.fire, count: OrbGrid.defaultColumns),
-            count: OrbGrid.defaultRows
-        )
-
-        for row in 0..<OrbGrid.defaultRows {
-            for column in 0..<OrbGrid.defaultColumns {
-                let candidates = OrbType.allCases.shuffled(using: &generator)
-                if let type = candidates.first(where: { candidate in
-                    let makesHorizontal = column >= 2
-                        && board[row][column - 1] == candidate
-                        && board[row][column - 2] == candidate
-                    let makesVertical = row >= 2
-                        && board[row - 1][column] == candidate
-                        && board[row - 2][column] == candidate
-                    return !makesHorizontal && !makesVertical
-                }) {
-                    board[row][column] = type
+        for target in candidates {
+            for targetType in OrbType.allCases.shuffled(using: &generator) {
+                for _ in 0..<32 {
+                    guard let planned = planTypes(
+                        grid: grid,
+                        refillSlots: refillSlots,
+                        forcedTypes: Dictionary(uniqueKeysWithValues: target.map { ($0, targetType) }),
+                        using: &generator
+                    ) else { continue }
+                    let simulated = simulatedGrid(grid: grid, slots: refillSlots, types: planned)
+                    let matches = MatchDetector().detect(in: simulated)
+                    guard matches.count == 1,
+                          matches[0].count == 3,
+                          matches[0].positions == Set(target),
+                          isStableAfterRemoving(matches[0], from: simulated) else { continue }
+                    return planned
                 }
             }
         }
-        return board
+        return nil
     }
 
-    private static func deterministicSafeBoardTypes() -> [[OrbType]] {
-        let types = OrbType.allCases
-        return (0..<OrbGrid.defaultRows).map { row in
-            (0..<OrbGrid.defaultColumns).map { column in
-                types[(row * 2 + column) % types.count]
+    func makeSafeRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        using generator: inout R
+    ) -> [OrbType]? {
+        guard refillSlots == grid.emptyPositions() else { return nil }
+        for _ in 0..<128 {
+            guard let planned = planTypes(
+                grid: grid,
+                refillSlots: refillSlots,
+                forcedTypes: [:],
+                using: &generator
+            ) else { continue }
+            let simulated = simulatedGrid(grid: grid, slots: refillSlots, types: planned)
+            if MatchDetector().detect(in: simulated).isEmpty { return planned }
+        }
+        return nil
+    }
+
+    private func tripleCandidates(in slots: Set<GridPosition>) -> [[GridPosition]] {
+        var result: [[GridPosition]] = []
+        for row in 0..<OrbGrid.defaultRows {
+            for column in 0...(OrbGrid.defaultColumns - 3) {
+                let candidate = (0..<3).map { GridPosition(row: row, column: column + $0) }
+                if candidate.allSatisfy(slots.contains) { result.append(candidate) }
             }
         }
+        for column in 0..<OrbGrid.defaultColumns {
+            for row in 0...(OrbGrid.defaultRows - 3) {
+                let candidate = (0..<3).map { GridPosition(row: row + $0, column: column) }
+                if candidate.allSatisfy(slots.contains) { result.append(candidate) }
+            }
+        }
+        return result
+    }
+
+    private func planTypes<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        forcedTypes: [GridPosition: OrbType],
+        using generator: inout R
+    ) -> [OrbType]? {
+        var board = (0..<grid.rows).map { row in
+            (0..<grid.columns).map { column in
+                grid.orb(at: GridPosition(row: row, column: column))?.type
+            }
+        }
+        for (position, type) in forcedTypes { board[position.row][position.column] = type }
+
+        for position in refillSlots.shuffled(using: &generator) where forcedTypes[position] == nil {
+            let candidates = OrbType.allCases.shuffled(using: &generator)
+            guard let type = candidates.first(where: {
+                !formsMatch(type: $0, at: position, in: board)
+            }) else { return nil }
+            board[position.row][position.column] = type
+        }
+        return refillSlots.compactMap { board[$0.row][$0.column] }
+    }
+
+    private func formsMatch(type: OrbType, at position: GridPosition, in board: [[OrbType?]]) -> Bool {
+        func contiguousCount(rowStep: Int, columnStep: Int) -> Int {
+            var count = 0
+            var row = position.row + rowStep
+            var column = position.column + columnStep
+            while (0..<OrbGrid.defaultRows).contains(row),
+                  (0..<OrbGrid.defaultColumns).contains(column),
+                  board[row][column] == type {
+                count += 1
+                row += rowStep
+                column += columnStep
+            }
+            return count
+        }
+        let horizontal = 1 + contiguousCount(rowStep: 0, columnStep: -1)
+            + contiguousCount(rowStep: 0, columnStep: 1)
+        let vertical = 1 + contiguousCount(rowStep: -1, columnStep: 0)
+            + contiguousCount(rowStep: 1, columnStep: 0)
+        return horizontal >= 3 || vertical >= 3
+    }
+
+    private func simulatedGrid(grid: OrbGrid, slots: [GridPosition], types: [OrbType]) -> OrbGrid {
+        let typeByPosition = Dictionary(uniqueKeysWithValues: zip(slots, types))
+        let completeTypes = (0..<grid.rows).map { row in
+            (0..<grid.columns).map { column in
+                let position = GridPosition(row: row, column: column)
+                return grid.orb(at: position)?.type ?? typeByPosition[position] ?? .fire
+            }
+        }
+        return OrbGrid(types: completeTypes)
+    }
+
+    private func isStableAfterRemoving(_ match: MatchResult, from grid: OrbGrid) -> Bool {
+        _ = grid.remove(match.positions)
+        _ = grid.collapse()
+        return MatchDetector().detect(in: grid).isEmpty
     }
 }

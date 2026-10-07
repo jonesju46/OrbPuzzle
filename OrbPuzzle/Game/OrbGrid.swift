@@ -106,34 +106,37 @@ final class OrbGrid {
     }
 
     func refill(typeProvider: (GridPosition) -> OrbType) -> [OrbSpawn] {
-        var spawns: [OrbSpawn] = []
-        for column in 0..<columns {
-            let emptyRows = (0..<rows).filter { cells[$0][column] == nil }
-            for (offset, row) in emptyRows.enumerated() {
-                let destination = GridPosition(row: row, column: column)
-                let orb = Orb(type: typeProvider(destination))
-                cells[row][column] = orb
-                spawns.append(OrbSpawn(orb: orb, destination: destination, sourceRow: rows + offset))
-            }
-        }
-        return spawns
+        let slots = emptyPositions()
+        let types = slots.map(typeProvider)
+        return refill(types: types, at: slots)
     }
 
-    /// Replaces the board with newly generated skyfall orbs. Every returned orb has
-    /// a source row above the board so SpriteKit renders an actual refill animation.
-    func replaceAll(with types: [[OrbType]]) -> [OrbSpawn] {
-        precondition(types.count == rows && types.allSatisfy { $0.count == columns })
-        var spawns: [OrbSpawn] = []
-        for row in 0..<rows {
-            for column in 0..<columns {
-                let orb = Orb(type: types[row][column])
-                cells[row][column] = orb
-                spawns.append(OrbSpawn(
-                    orb: orb,
-                    destination: GridPosition(row: row, column: column),
-                    sourceRow: rows + row
-                ))
+    /// Empty slots in the exact order used for refill: bottom-to-top per column.
+    func emptyPositions() -> [GridPosition] {
+        var positions: [GridPosition] = []
+        for column in 0..<columns {
+            for row in 0..<rows where cells[row][column] == nil {
+                positions.append(GridPosition(row: row, column: column))
             }
+        }
+        return positions
+    }
+
+    func refill(types: [OrbType], at positions: [GridPosition]) -> [OrbSpawn] {
+        precondition(types.count == positions.count)
+        precondition(positions == emptyPositions())
+        var spawns: [OrbSpawn] = []
+        var offsetsByColumn: [Int: Int] = [:]
+        for (position, type) in zip(positions, types) {
+            let offset = offsetsByColumn[position.column, default: 0]
+            let orb = Orb(type: type)
+            cells[position.row][position.column] = orb
+            spawns.append(OrbSpawn(
+                orb: orb,
+                destination: position,
+                sourceRow: rows + offset
+            ))
+            offsetsByColumn[position.column] = offset + 1
         }
         return spawns
     }

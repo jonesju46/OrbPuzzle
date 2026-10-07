@@ -192,39 +192,82 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(grid.orb(at: GridPosition(row: 4, column: 0)))
     }
 
-    func testSafeSkyfallRefillContainsNoMatch() {
+    func testHorizontalThreeRemovesAndRefillsExactlyThree() {
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        assertResolveCounts(grid: grid, combos: 1, removed: 3)
+    }
+
+    func testVerticalThreeRemovesAndRefillsExactlyThree() {
+        var types = stableBoardTypes()
+        for row in 2...4 { types[row][5] = .fire }
+        let grid = OrbGrid(types: types)
+        assertResolveCounts(grid: grid, combos: 1, removed: 3)
+    }
+
+    func testTwoSeparateThreeMatchesRemoveAndRefillExactlySix() {
+        var types = stableBoardTypes()
+        for column in 0...2 { types[4][column] = .fire }
+        for column in 3...5 { types[4][column] = .water }
+        let grid = OrbGrid(types: types)
+        assertResolveCounts(grid: grid, combos: 2, removed: 6)
+    }
+
+    func testFiveMatchRemovesAndRefillsExactlyFive() {
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 5))
+        assertResolveCounts(grid: grid, combos: 1, removed: 5)
+    }
+
+    func testSafeFinalRefillOnlyFillsEmptySlotsAndContainsNoMatch() {
         var generator = SeededGenerator(seed: 7)
-        for _ in 0..<100 {
-            let types = SkyfallController.makeSafeBoardTypes(using: &generator)
-            XCTAssertTrue(MatchDetector().detect(in: OrbGrid(types: types)).isEmpty)
-        }
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        let result = ResolveResult(matches: MatchDetector().detect(in: grid))
+        _ = grid.remove(result.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+
+        let types = SkyfallController().makeSafeRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        )
+        XCTAssertEqual(types?.count, 3)
+        guard let types else { return }
+        let spawns = grid.refill(types: types, at: slots)
+        XCTAssertEqual(spawns.count, 3)
+        XCTAssertTrue(MatchDetector().detect(in: grid).isEmpty)
     }
 
-    func testEveryControlledSkyfallCycleContainsExactlyOneMatchGroup() {
-        var generator = SeededGenerator(seed: 19)
-        for _ in 0..<200 {
-            let types = SkyfallController.makeSingleMatchBoardTypes(using: &generator)
-            XCTAssertEqual(MatchDetector().detect(in: OrbGrid(types: types)).count, 1)
+    func testControlledCyclePreservesAllTwentySevenUnmatchedOrbIDs() {
+        var generator = SeededGenerator(seed: 27)
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        let matches = MatchDetector().detect(in: grid)
+        let result = ResolveResult(matches: matches)
+        let removedIDs = Set(result.removedPositions.compactMap { grid.orb(at: $0)?.id })
+        let preservedIDs = allOrbIDs(in: grid).subtracting(removedIDs)
+
+        XCTAssertEqual(preservedIDs.count, 27)
+        _ = grid.remove(result.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        let controller = SkyfallController()
+        guard let types = controller.makeControlledRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        ) else {
+            XCTFail("Expected a three-slot controlled refill")
+            return
         }
+        let spawns = grid.refill(types: types, at: slots)
+
+        XCTAssertEqual(spawns.count, 3)
+        XCTAssertTrue(preservedIDs.isSubset(of: allOrbIDs(in: grid)))
+        XCTAssertEqual(allOrbIDs(in: grid).intersection(removedIDs).count, 0)
     }
 
-    func testGuaranteedSkyfallUsesOneCyclePerComboThroughNinetyNine() {
-        var generator = SeededGenerator(seed: 99)
+    func testGuaranteedSkyfallUsesOneThreeOrbRefillPerCycleThroughNinetyNine() {
         for requested in [1, 10, 19, 99] {
-            let controller = SkyfallController()
-            controller.reset(requestedCombos: requested)
-            var cycleCount = 0
-            while controller.needsAnotherCycle {
-                let boardTypes = SkyfallController.makeSingleMatchBoardTypes(using: &generator)
-                let matchCount = MatchDetector().detect(in: OrbGrid(types: boardTypes)).count
-                XCTAssertEqual(matchCount, 1)
-                XCTAssertTrue(controller.recordCycle(matchGroupCount: matchCount))
-                cycleCount += 1
-                XCTAssertLessThanOrEqual(cycleCount, requested)
-            }
-            XCTAssertEqual(cycleCount, requested)
-            XCTAssertEqual(controller.generatedCombos, requested)
-            XCTAssertEqual(controller.remainingCombos, 0)
+            assertPersistentSkyfallCycles(requested: requested)
         }
     }
 
@@ -252,6 +295,108 @@ final class OrbPuzzleEngineTests: XCTestCase {
             }
             XCTAssertEqual(initial + controller.generatedCombos, expectedTotal)
         }
+    }
+
+    private func assertResolveCounts(
+        grid: OrbGrid,
+        combos expectedCombos: Int,
+        removed expectedRemoved: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let result = ResolveResult(matches: MatchDetector().detect(in: grid))
+        XCTAssertEqual(result.comboCount, expectedCombos, file: file, line: line)
+        XCTAssertEqual(result.removedOrbCount, expectedRemoved, file: file, line: line)
+        XCTAssertEqual(grid.remove(result.removedPositions).count, expectedRemoved, file: file, line: line)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        XCTAssertEqual(slots.count, expectedRemoved, file: file, line: line)
+        let refillTypes = slots.enumerated().map { OrbType.allCases[$0.offset % OrbType.allCases.count] }
+        XCTAssertEqual(grid.refill(types: refillTypes, at: slots).count, expectedRemoved, file: file, line: line)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30, file: file, line: line)
+    }
+
+    private func assertPersistentSkyfallCycles(
+        requested: Int,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var generator = SeededGenerator(seed: UInt64(requested))
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: requested)
+        var cycleCount = 0
+
+        while controller.needsAnotherCycle {
+            let matches = MatchDetector().detect(in: grid)
+            let result = ResolveResult(matches: matches)
+            XCTAssertEqual(result.comboCount, 1, file: file, line: line)
+            XCTAssertEqual(result.removedOrbCount, 3, file: file, line: line)
+            XCTAssertEqual(matches.first?.count, 3, file: file, line: line)
+            XCTAssertTrue(controller.recordCycle(matchGroupCount: result.comboCount), file: file, line: line)
+
+            let removedIDs = Set(result.removedPositions.compactMap { grid.orb(at: $0)?.id })
+            let preservedIDs = allOrbIDs(in: grid).subtracting(removedIDs)
+            XCTAssertEqual(grid.remove(result.removedPositions).count, 3, file: file, line: line)
+            _ = grid.collapse()
+            let slots = grid.emptyPositions()
+            XCTAssertEqual(slots.count, 3, file: file, line: line)
+
+            let refillTypes: [OrbType]?
+            if controller.needsAnotherCycle {
+                refillTypes = controller.makeControlledRefill(
+                    grid: grid,
+                    refillSlots: slots,
+                    using: &generator
+                )
+            } else {
+                refillTypes = controller.makeSafeRefill(
+                    grid: grid,
+                    refillSlots: slots,
+                    using: &generator
+                )
+            }
+            guard let refillTypes else {
+                XCTFail("Unable to plan slot-only refill", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(refillTypes.count, 3, file: file, line: line)
+            let spawns = grid.refill(types: refillTypes, at: slots)
+            XCTAssertEqual(spawns.count, 3, file: file, line: line)
+            XCTAssertTrue(preservedIDs.isSubset(of: allOrbIDs(in: grid)), file: file, line: line)
+
+            let nextMatches = MatchDetector().detect(in: grid)
+            if controller.needsAnotherCycle {
+                XCTAssertEqual(nextMatches.count, 1, file: file, line: line)
+                XCTAssertEqual(nextMatches.first?.count, 3, file: file, line: line)
+            } else {
+                XCTAssertTrue(nextMatches.isEmpty, file: file, line: line)
+            }
+            cycleCount += 1
+        }
+
+        XCTAssertEqual(cycleCount, requested, file: file, line: line)
+        XCTAssertEqual(controller.generatedCombos, requested, file: file, line: line)
+        XCTAssertEqual(controller.remainingCombos, 0, file: file, line: line)
+    }
+
+    private func stableBoardTypes() -> [[OrbType]] {
+        let types = OrbType.allCases
+        return (0..<OrbGrid.defaultRows).map { row in
+            (0..<OrbGrid.defaultColumns).map { column in
+                types[(row * 2 + column) % types.count]
+            }
+        }
+    }
+
+    private func boardWithHorizontalMatch(length: Int) -> [[OrbType]] {
+        var types = stableBoardTypes()
+        for column in 0..<length { types[4][column] = .fire }
+        return types
+    }
+
+    private func allOrbIDs(in grid: OrbGrid) -> Set<UUID> {
+        Set(grid.cells.flatMap { $0 }.compactMap { $0?.id })
     }
 }
 

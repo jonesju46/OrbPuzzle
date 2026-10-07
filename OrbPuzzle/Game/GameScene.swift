@@ -271,7 +271,7 @@ final class GameScene: SKScene {
         comboLabel.text = "Combo 0"
         let initialMatches = matchDetector.detect(in: grid)
         guard !initialMatches.isEmpty else {
-            refillAndContinue()
+            finishResolution()
             return
         }
         process(matches: initialMatches)
@@ -279,10 +279,11 @@ final class GameScene: SKScene {
 
     private func process(matches: [MatchResult]) {
         gameState = .removing
-        comboController.add(matches)
+        let resolveResult = ResolveResult(matches: matches)
+        comboController.add(resolveResult.matches)
         comboController.animate(label: comboLabel)
-        let positions = matches.reduce(into: Set<GridPosition>()) { $0.formUnion($1.positions) }
-        let removed = grid.remove(positions)
+        let removed = grid.remove(resolveResult.removedPositions)
+        assert(removed.count == resolveResult.removedOrbCount)
         for orb in removed {
             guard let node = orbNodes[orb.id] else { continue }
             node.run(.group([
@@ -302,35 +303,46 @@ final class GameScene: SKScene {
                 nodes: self.orbNodes,
                 pointForPosition: { self.point(for: $0) }
             )
-            self.run(after: fallDuration) { [weak self] in self?.refillAndContinue() }
+            self.run(after: fallDuration) { [weak self] in
+                self?.refillAndContinue(expectedRefillCount: resolveResult.removedOrbCount)
+            }
         }
     }
 
-    private func refillAndContinue() {
+    private func refillAndContinue(expectedRefillCount: Int) {
         gameState = .refilling
-        let isSkyfallCycle = skyfallController.needsAnotherCycle
-        let boardTypes = isSkyfallCycle
-            ? SkyfallController.makeSingleMatchBoardTypes()
-            : SkyfallController.makeSafeBoardTypes()
-
-        // Guaranteed skyfall uses a complete controlled refill. Every orb is a new
-        // falling node, so the requested combos are produced by real board matches.
-        for node in orbNodes.values {
-            node.removeAllActions()
-            node.removeFromParent()
+        let refillSlots = grid.emptyPositions()
+        guard refillSlots.count == expectedRefillCount else {
+            assertionFailure("Refill slots must equal removed orb count")
+            finishResolution()
+            return
         }
-        orbNodes.removeAll(keepingCapacity: true)
+        let isSkyfallCycle = skyfallController.needsAnotherCycle
+        let plannedTypes = isSkyfallCycle
+            ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
+            : skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        guard let plannedTypes, plannedTypes.count == refillSlots.count else {
+            assertionFailure("Unable to plan a slot-only skyfall refill")
+            finishResolution()
+            return
+        }
 
-        let result = refillController.refillWithControlledBoard(
+        let preservedCount = orbNodes.count
+        let result = refillController.refillEmptySlots(
             grid: grid,
-            types: boardTypes,
+            slots: refillSlots,
+            types: plannedTypes,
             boardNode: boardNode,
             cellSize: cellSize,
             pointForPosition: { [weak self] position in
                 self?.point(for: position) ?? .zero
             }
         )
+        assert(result.spawns.count == expectedRefillCount)
         for node in result.nodes { orbNodes[node.orbID] = node }
+#if DEBUG
+        print("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
+#endif
         run(after: result.duration) { [weak self] in
             guard let self else { return }
             let matches = self.matchDetector.detect(in: self.grid)
@@ -347,8 +359,9 @@ final class GameScene: SKScene {
 
             self.gameState = .skyfall
             guard matches.count == 1,
+                  matches[0].count == 3,
                   self.skyfallController.recordCycle(matchGroupCount: matches.count) else {
-                assertionFailure("A controlled skyfall cycle must generate exactly one match group")
+                assertionFailure("A controlled skyfall cycle must generate exactly one three-orb match")
                 self.finishResolution()
                 return
             }

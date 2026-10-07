@@ -11,14 +11,14 @@ An independent SwiftUI + SpriteKit iOS project implementing the core 6×5 orb en
 - Configurable finger-up policy: keep playing until zero or resolve immediately
 - Horizontal/vertical 3+ matching with connected-group combo counting and 5+ flags
 - Non-blocking SpriteKit remove, gravity, refill, swap, and combo animations
-- Exact 1–99 guaranteed skyfall combos using controlled, visible refill boards
-- Exactly one randomized 3–5 orb match group per non-blocking skyfall cycle
-- Safe randomized filler prevents every cycle from producing an extra match group
-- Final controlled refill contains no immediate match, preventing combo overshoot
+- Exact 1–99 guaranteed skyfall combos using persistent board state
+- Exactly one three-orb match group per non-blocking controlled skyfall cycle
+- Remove, gravity, and refill touch only the actual matched slots; all surviving Orb IDs and types are preserved
+- Safe randomized types are generated only for empty refill slots, including the final zero-match refill
 - Persistent turn time, no-resolve policy, and skyfall count through `@AppStorage`
 - Gameplay-only navigation edge/pan suppression, an exact 44×44 Settings button, and no gameplay overlay hit targets
 - Debug-only FPS, state, time, total combo, and skyfall progress overlay
-- XCTest coverage for one-group cycles and exact 1/10/19/99-cycle skyfall totals
+- XCTest coverage for actual removed/refill counts, preserved identities, and exact 1/10/19/99-cycle skyfall totals
 
 ## Architecture
 

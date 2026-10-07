@@ -1,14 +1,15 @@
 import SpriteKit
 
 final class RefillController {
-    func refillWithControlledBoard(
+    func refillEmptySlots(
         grid: OrbGrid,
-        types: [[OrbType]],
+        slots: [GridPosition],
+        types: [OrbType],
         boardNode: SKNode,
         cellSize: CGSize,
         pointForPosition: (GridPosition) -> CGPoint
     ) -> (spawns: [OrbSpawn], nodes: [OrbNode], duration: TimeInterval) {
-        let spawns = grid.replaceAll(with: types)
+        let spawns = grid.refill(types: types, at: slots)
         let nodes = spawns.map { spawn -> OrbNode in
             let node = OrbNode(orb: spawn.orb, diameter: min(cellSize.width, cellSize.height) * 0.82)
             let destination = pointForPosition(spawn.destination)
