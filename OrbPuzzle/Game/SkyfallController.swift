@@ -75,8 +75,10 @@ final class SkyfallController {
                 forcedTypes: [:],
                 using: &generator
             ) else { continue }
-            let simulated = simulatedGrid(grid: grid, slots: refillSlots, types: planned)
-            if MatchDetector().detect(in: simulated).isEmpty { return planned }
+            // Candidate checks apply only to new slots. Any match made solely by
+            // existing orbs survives unchanged and is found by the normal
+            // full-board scan after the fall animation completes.
+            return planned
         }
         return nil
     }

@@ -25,7 +25,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             let grid = OrbGrid(types: [row])
             let result = MatchDetector().detect(in: grid)
             XCTAssertEqual(result.count, 1)
-            XCTAssertEqual(result[0].count, length)
+            XCTAssertEqual(result[0].matchSize, length)
             XCTAssertEqual(result[0].isFiveMatch, length >= 5)
         }
     }
@@ -35,9 +35,137 @@ final class OrbPuzzleEngineTests: XCTestCase {
             let grid = OrbGrid(types: Array(repeating: [.water], count: length))
             let result = MatchDetector().detect(in: grid)
             XCTAssertEqual(result.count, 1)
-            XCTAssertEqual(result[0].count, length)
+            XCTAssertEqual(result[0].matchSize, length)
             XCTAssertEqual(result[0].isFiveMatch, length >= 5)
         }
+    }
+
+    func testAllSixOrbTypesUseTheSameThreeOrMoreRule() {
+        for type in OrbType.allCases {
+            let result = MatchDetector().detect(in: OrbGrid(types: [[type, type, type]]))
+            XCTAssertEqual(result.count, 1, "type=\(type)")
+            XCTAssertEqual(result[0].type, type)
+            XCTAssertEqual(result[0].matchSize, 3)
+        }
+    }
+
+    func testConnectedTAndLShapesNormalizeToOneGroup() {
+        let tShape: Set<GridPosition> = [
+            GridPosition(row: 2, column: 1),
+            GridPosition(row: 2, column: 2),
+            GridPosition(row: 2, column: 3),
+            GridPosition(row: 3, column: 2),
+            GridPosition(row: 4, column: 2)
+        ]
+        let lShape: Set<GridPosition> = [
+            GridPosition(row: 0, column: 1),
+            GridPosition(row: 1, column: 1),
+            GridPosition(row: 2, column: 1),
+            GridPosition(row: 0, column: 2),
+            GridPosition(row: 0, column: 3)
+        ]
+
+        for positions in [tShape, lShape] {
+            let result = MatchDetector().detect(in: gridWithHeart(at: positions))
+            XCTAssertEqual(result.count, 1)
+            XCTAssertEqual(result[0].type, .heart)
+            XCTAssertEqual(result[0].matchSize, 5)
+            XCTAssertEqual(result[0].positions, positions)
+        }
+    }
+
+    func testCrossCountsSharedCenterOnce() {
+        let positions: Set<GridPosition> = Set(
+            (0..<5).map { GridPosition(row: $0, column: 2) }
+                + (1...3).map { GridPosition(row: 2, column: $0) }
+        )
+        let result = MatchDetector().detect(in: gridWithHeart(at: positions))
+
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result[0].matchSize, 7)
+        XCTAssertEqual(result[0].positions, positions)
+    }
+
+    func testConnectedRunsSupportTenAndThirtyOrbGroups() {
+        let tenPositions = Set(
+            (1...2).flatMap { row in
+                (0..<5).map { GridPosition(row: row, column: $0) }
+            }
+        )
+        let tenResult = MatchDetector().detect(in: gridWithHeart(at: tenPositions))
+        XCTAssertEqual(tenResult.count, 1)
+        XCTAssertEqual(tenResult[0].matchSize, 10)
+        XCTAssertEqual(ResolveResult(matches: tenResult).comboCount, 1)
+        XCTAssertEqual(ResolveResult(matches: tenResult).removedOrbCount, 10)
+
+        let fullGrid = OrbGrid(types: Array(
+            repeating: Array(repeating: .heart, count: 6),
+            count: 5
+        ))
+        let thirtyResult = MatchDetector().detect(in: fullGrid)
+        XCTAssertEqual(thirtyResult.count, 1)
+        XCTAssertEqual(thirtyResult[0].matchSize, 30)
+        XCTAssertEqual(thirtyResult[0].positions.count, 30)
+        XCTAssertEqual(ResolveResult(matches: thirtyResult).comboCount, 1)
+        XCTAssertEqual(ResolveResult(matches: thirtyResult).removedOrbCount, 30)
+    }
+
+    func testDisconnectedSameColorRunsRemainSeparateCombos() {
+        let first = Set((0...2).map { GridPosition(row: 0, column: $0) })
+        let second = Set((3...5).map { GridPosition(row: 4, column: $0) })
+        let result = MatchDetector().detect(in: gridWithHeart(at: first.union(second)))
+
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result.map(\.matchSize), [3, 3])
+        XCTAssertTrue(result[0].positions.isDisjoint(with: result[1].positions))
+        XCTAssertEqual(ResolveResult(matches: result).comboCount, 2)
+        XCTAssertEqual(ResolveResult(matches: result).removedOrbCount, 6)
+    }
+
+    func testGravityRefillChainIsDetectedByFullBoardScan() {
+        var types = matchTestBoardTypes()
+        for row in [0, 2, 4] { types[row][0] = .light }
+        for row in [1, 3] {
+            for column in 0...2 { types[row][column] = .water }
+        }
+        let grid = OrbGrid(types: types)
+        let initial = MatchDetector().detect(in: grid)
+        XCTAssertEqual(initial.filter { $0.type == .water }.count, 2)
+
+        let initialResult = ResolveResult(matches: initial)
+        _ = grid.remove(initialResult.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        let gravityMatches = MatchDetector().detect(in: grid)
+        XCTAssertEqual(gravityMatches.count, 1)
+        XCTAssertEqual(gravityMatches[0].type, .light)
+        XCTAssertEqual(gravityMatches[0].matchSize, 3)
+
+        var generator = SeededGenerator(seed: 317)
+        let refillTypes = SkyfallController().makeSafeRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        )
+        XCTAssertEqual(refillTypes?.count, slots.count)
+        guard let refillTypes else { return }
+        _ = grid.refill(types: refillTypes, at: slots)
+
+        let stableBoard = StableBoardScan(matches: MatchDetector().detect(in: grid))
+        XCTAssertFalse(stableBoard.canFinishResolve)
+        XCTAssertEqual(stableBoard.matches.count, 1)
+        XCTAssertEqual(stableBoard.matches[0].type, .light)
+        XCTAssertEqual(stableBoard.matches[0].matchSize, 3)
+    }
+
+    func testStableBoardCannotFinishWhileAnyMatchRemains() {
+        let matched = StableBoardScan(matches: MatchDetector().detect(
+            in: gridWithHeart(at: Set((0...2).map { GridPosition(row: 0, column: $0) }))
+        ))
+        let clear = StableBoardScan(matches: MatchDetector().detect(in: OrbGrid(types: matchTestBoardTypes())))
+
+        XCTAssertFalse(matched.canFinishResolve)
+        XCTAssertTrue(clear.canFinishResolve)
     }
 
     func testSeparateGroupsAreMultipleCombos() {
@@ -563,6 +691,21 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 types[(row * 2 + column) % types.count]
             }
         }
+    }
+
+    private func matchTestBoardTypes() -> [[OrbType]] {
+        let background: [OrbType] = [.fire, .wood, .dark]
+        return (0..<OrbGrid.defaultRows).map { row in
+            (0..<OrbGrid.defaultColumns).map { column in
+                background[(row + column) % background.count]
+            }
+        }
+    }
+
+    private func gridWithHeart(at positions: Set<GridPosition>) -> OrbGrid {
+        var types = matchTestBoardTypes()
+        for position in positions { types[position.row][position.column] = .heart }
+        return OrbGrid(types: types)
     }
 
     private func boardWithHorizontalMatch(length: Int) -> [[OrbType]] {

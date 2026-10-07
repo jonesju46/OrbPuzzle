@@ -20,7 +20,14 @@ final class GameScene: SKScene {
     private var debugLabels: [SKLabelNode] = []
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
-    private var gameState: GameState = .idle { didSet { updateDebugOverlay() } }
+    private var gameState: GameState = .idle {
+        didSet {
+            updateDebugOverlay()
+#if DEBUG
+            if gameState == .idle { validateIdleBoard() }
+#endif
+        }
+    }
     private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
     private var requestedSkyfallCombos = GameSettings.defaultSkyfallComboCount
     private var lastUpdateTime: TimeInterval = 0
@@ -395,17 +402,6 @@ final class GameScene: SKScene {
             logStaleCompletion("refill entry")
             return
         }
-        let isSkyfallCycle = skyfallController.needsAnotherCycle
-        if !isSkyfallCycle {
-            guard resolveLifecycle.beginFinalization() else {
-                logStaleCompletion("duplicate final refill")
-                return
-            }
-#if DEBUG
-            print("[SKYFALL] entering finalization")
-#endif
-        }
-
         gameState = .refilling
         // Always query after gravity; never reuse slots captured by an older cycle.
         let refillSlots = grid.emptyPositions()
@@ -417,17 +413,30 @@ final class GameScene: SKScene {
             return
         }
 
+        // Try a controlled refill only while quota remains. If the preserved
+        // board already contains a gravity-created match, controlled planning
+        // cannot prove exactly one group and safely falls back to a normal slot
+        // refill. Actual resolve detection happens only after fall completion.
+        let controlledTypes = skyfallController.needsAnotherCycle
+            ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
+            : nil
+        let isControlledSkyfallRefill = controlledTypes != nil
+        let isNaturalChainRefill = skyfallController.needsAnotherCycle
+            && controlledTypes == nil
+        let isFinalRefill = !skyfallController.needsAnotherCycle
+
 #if DEBUG
         let cycleNumber = skyfallController.generatedCombos + 1
-        if isSkyfallCycle {
+        if isControlledSkyfallRefill {
             print("[SKYFALL] cycle \(cycleNumber)/\(skyfallController.requestedCombos) begin")
+        } else if isNaturalChainRefill {
+            print("[MATCH] safe chain refill before stable-board scan")
         } else {
             print("[REFILL] final begin slots=\(refillSlots.count)")
         }
 #endif
-        let plannedTypes = isSkyfallCycle
-            ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
-            : skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        let plannedTypes = controlledTypes
+            ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
 #if DEBUG
             print("[REFILL-BUG] unable to plan slot-only refill slots=\(refillSlots.count)")
@@ -463,47 +472,73 @@ final class GameScene: SKScene {
                 self.logStaleCompletion("refill animation")
                 return
             }
-            let matches = self.matchDetector.detect(in: self.grid)
+            let stableBoard = StableBoardScan(matches: self.matchDetector.detect(in: self.grid))
+            let matches = stableBoard.matches
 
-            if !isSkyfallCycle {
-                guard self.resolveLifecycle.state == .finalizing else {
-                    self.logStaleCompletion("final refill state")
+            if isControlledSkyfallRefill {
+                guard self.resolveLifecycle.acceptsSkyfallCompletion else {
+                    self.logStaleCompletion("skyfall cycle")
                     return
                 }
+                self.gameState = .skyfall
+                if matches.count == 1,
+                   matches[0].matchSize == 3,
+                   self.skyfallController.recordCycle(matchGroupCount: matches.count) {
 #if DEBUG
-                print("[REFILL] final complete new=\(result.spawns.count)")
-                if !matches.isEmpty {
-                    print("[FINAL-BUG] final refill matches=\(matches.count)")
+                    print("[SKYFALL] cycle \(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos) complete")
+#endif
+                } else {
+#if DEBUG
+                    print("[SKYFALL-BUG] controlled refill groups=\(matches.count); resolving detected board without skipping matches")
+#endif
                 }
+            }
+
+            // Every refill path ends at the same stable-board full-grid scan.
+            // Never finish while MatchDetector still reports a 3+ group.
+            if !stableBoard.canFinishResolve {
+                self.process(matches: matches, resolveID: resolveID)
+                return
+            }
+
+            if isControlledSkyfallRefill {
+#if DEBUG
+                print("[SKYFALL-BUG] controlled refill produced no match")
 #endif
                 self.finishResolution(resolveID: resolveID)
                 return
             }
 
-            guard self.resolveLifecycle.acceptsSkyfallCompletion else {
-                self.logStaleCompletion("skyfall cycle")
-                return
-            }
-            self.gameState = .skyfall
-            guard matches.count == 1,
-                  matches[0].count == 3,
-                  self.skyfallController.recordCycle(matchGroupCount: matches.count) else {
+            guard isFinalRefill || !self.skyfallController.needsAnotherCycle else {
 #if DEBUG
-                print("[SKYFALL-BUG] expected one three-orb match groups=\(matches.count)")
+                print("[MATCH-BUG] natural chain disappeared before full-board scan")
 #endif
                 self.finishResolution(resolveID: resolveID)
                 return
             }
+            guard self.resolveLifecycle.beginFinalization() else {
+                self.logStaleCompletion("duplicate finalization")
+                return
+            }
 #if DEBUG
-            print("[SKYFALL] cycle \(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos) complete")
+            print("[SKYFALL] entering finalization")
+            print("[REFILL] final complete new=\(result.spawns.count)")
 #endif
-            self.process(matches: matches, resolveID: resolveID)
+            self.finishResolution(resolveID: resolveID)
         }
     }
 
     private func finishResolution(resolveID: UInt) {
         guard resolveID == activeResolveID else {
             logStaleCompletion("finish")
+            return
+        }
+        let stableBoard = StableBoardScan(matches: matchDetector.detect(in: grid))
+        guard stableBoard.canFinishResolve else {
+#if DEBUG
+            print("[MATCH-BUG] finish requested with matches count=\(stableBoard.matches.count); continuing resolve")
+#endif
+            process(matches: stableBoard.matches, resolveID: resolveID)
             return
         }
         guard resolveLifecycle.finish() else {
@@ -545,6 +580,13 @@ final class GameScene: SKScene {
     }
 
 #if DEBUG
+    private func validateIdleBoard() {
+        let matches = matchDetector.detect(in: grid)
+        if !matches.isEmpty {
+            print("[MATCH-BUG] idle board still contains matches count=\(matches.count)")
+        }
+    }
+
     private func validateFinalBoard() {
         let gridOrbs = grid.cells.flatMap { $0 }.compactMap { $0 }
         let gridIDs = Set(gridOrbs.map(\.id))

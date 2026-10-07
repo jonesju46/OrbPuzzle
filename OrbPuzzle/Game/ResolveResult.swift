@@ -17,6 +17,12 @@ enum ResolveStep: Equatable, Sendable {
     case refill(expectedRefillCount: Int)
 }
 
+struct StableBoardScan: Equatable, Sendable {
+    let matches: [MatchResult]
+
+    var canFinishResolve: Bool { matches.isEmpty }
+}
+
 struct ResolveResult: Equatable, Sendable {
     let matches: [MatchResult]
     let phases: [ResolvePhase]

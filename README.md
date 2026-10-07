@@ -9,7 +9,7 @@ An independent SwiftUI + SpriteKit iOS project implementing the core 6×5 orb en
 - Segment-to-grid traversal so fast horizontal, vertical, and diagonal drags do not skip cells
 - 5–99 second countdown based on elapsed scene time; it starts on the first valid swap
 - Configurable finger-up policy: keep playing until zero or resolve immediately
-- Horizontal/vertical 3+ matching with connected-group combo counting and 5+ flags
+- Full-board horizontal/vertical 3+ matching with normalized connected groups and exact 3–30 orb match sizes
 - Ordered non-blocking removal phases: Water, Fire, Wood, Light, Dark, then Heart; gravity runs once after all phases
 - Non-blocking SpriteKit remove, gravity, refill, swap, and combo animations
 - Exact 1–99 guaranteed skyfall combos using persistent board state
