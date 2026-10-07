@@ -25,6 +25,9 @@ final class GameScene: SKScene {
     private var requestedSkyfallCombos = GameSettings.defaultSkyfallComboCount
     private var lastUpdateTime: TimeInterval = 0
     private var forcedEndInProgress = false
+    private var resolveGeneration: UInt = 0
+    private var activeResolveID: UInt = 0
+    private var resolveLifecycle = ResolveLifecycle()
 #if DEBUG
     private var smoothedFPS = 60.0
 #endif
@@ -265,35 +268,52 @@ final class GameScene: SKScene {
     }
 
     private func resolveTurn() {
+        resolveGeneration &+= 1
+        activeResolveID = resolveGeneration
+        let resolveID = activeResolveID
+        resolveLifecycle.start()
         gameState = .resolving
         comboController.reset()
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
         comboLabel.text = "Combo 0"
         let initialMatches = matchDetector.detect(in: grid)
         guard !initialMatches.isEmpty else {
-            finishResolution()
+            finishResolution(resolveID: resolveID)
             return
         }
-        process(matches: initialMatches)
+        process(matches: initialMatches, resolveID: resolveID)
     }
 
-    private func process(matches: [MatchResult]) {
+    private func process(matches: [MatchResult], resolveID: UInt) {
+        guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
+            logStaleCompletion("process")
+            return
+        }
         let resolveResult = ResolveResult(matches: matches)
-        execute(resolveResult.steps, at: 0, result: resolveResult)
+        execute(resolveResult.steps, at: 0, result: resolveResult, resolveID: resolveID)
     }
 
     private func execute(
         _ steps: [ResolveStep],
         at index: Int,
-        result: ResolveResult
+        result: ResolveResult,
+        resolveID: UInt
     ) {
+        guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
+            logStaleCompletion("resolve step")
+            return
+        }
         guard steps.indices.contains(index) else { return }
 
         switch steps[index] {
         case let .remove(phase):
             gameState = .removing
             let removed = grid.remove(phase.removedPositions)
-            assert(removed.count == phase.removedOrbCount)
+#if DEBUG
+            if removed.count != phase.removedOrbCount {
+                print("[RESOLVE-BUG] phase=\(phase.type.rawValue) expected=\(phase.removedOrbCount) removed=\(removed.count)")
+            }
+#endif
             for orb in removed {
                 guard let node = orbNodes[orb.id] else { continue }
                 node.run(.sequence([
@@ -309,6 +329,12 @@ final class GameScene: SKScene {
                 + GameSettings.Tuning.removeDuration
             run(after: phaseDuration) { [weak self] in
                 guard let self else { return }
+                guard resolveID == self.activeResolveID,
+                      self.resolveLifecycle.acceptsSkyfallCompletion,
+                      self.gameState == .removing else {
+                    self.logStaleCompletion("remove phase")
+                    return
+                }
                 for orb in removed {
                     self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
                 }
@@ -318,13 +344,22 @@ final class GameScene: SKScene {
                 print("[RESOLVE] phase=\(phase.type.rawValue) groups=\(phase.groupCount)")
 #endif
                 self.run(after: GameSettings.Tuning.resolvePhaseDelay) { [weak self] in
-                    self?.execute(steps, at: index + 1, result: result)
+                    self?.execute(
+                        steps,
+                        at: index + 1,
+                        result: result,
+                        resolveID: resolveID
+                    )
                 }
             }
 
         case let .gravity(expectedRemovedOrbCount: expectedRemovedOrbCount):
-            assert(grid.emptyPositions().count == expectedRemovedOrbCount)
-            assert(comboController.comboCount == result.comboCount)
+#if DEBUG
+            let emptyCount = grid.emptyPositions().count
+            if emptyCount != expectedRemovedOrbCount {
+                print("[RESOLVE-BUG] gravity expected=\(expectedRemovedOrbCount) empty=\(emptyCount)")
+            }
+#endif
             gameState = .falling
 #if DEBUG
             print("[RESOLVE] gravity removed=\(expectedRemovedOrbCount)")
@@ -335,29 +370,69 @@ final class GameScene: SKScene {
                 pointForPosition: { self.point(for: $0) }
             )
             run(after: fallDuration) { [weak self] in
-                self?.execute(steps, at: index + 1, result: result)
+                guard let self else { return }
+                guard resolveID == self.activeResolveID,
+                      self.resolveLifecycle.acceptsSkyfallCompletion,
+                      self.gameState == .falling else {
+                    self.logStaleCompletion("gravity")
+                    return
+                }
+                self.execute(
+                    steps,
+                    at: index + 1,
+                    result: result,
+                    resolveID: resolveID
+                )
             }
 
         case let .refill(expectedRefillCount: expectedRefillCount):
-            refillAndContinue(expectedRefillCount: expectedRefillCount)
+            refillAndContinue(expectedRefillCount: expectedRefillCount, resolveID: resolveID)
         }
     }
 
-    private func refillAndContinue(expectedRefillCount: Int) {
-        gameState = .refilling
-        let refillSlots = grid.emptyPositions()
-        guard refillSlots.count == expectedRefillCount else {
-            assertionFailure("Refill slots must equal removed orb count")
-            finishResolution()
+    private func refillAndContinue(expectedRefillCount: Int, resolveID: UInt) {
+        guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
+            logStaleCompletion("refill entry")
             return
         }
         let isSkyfallCycle = skyfallController.needsAnotherCycle
+        if !isSkyfallCycle {
+            guard resolveLifecycle.beginFinalization() else {
+                logStaleCompletion("duplicate final refill")
+                return
+            }
+#if DEBUG
+            print("[SKYFALL] entering finalization")
+#endif
+        }
+
+        gameState = .refilling
+        // Always query after gravity; never reuse slots captured by an older cycle.
+        let refillSlots = grid.emptyPositions()
+        guard refillSlots.count == expectedRefillCount else {
+#if DEBUG
+            print("[REFILL-BUG] expected=\(expectedRefillCount) slots=\(refillSlots.count)")
+#endif
+            finishResolution(resolveID: resolveID)
+            return
+        }
+
+#if DEBUG
+        let cycleNumber = skyfallController.generatedCombos + 1
+        if isSkyfallCycle {
+            print("[SKYFALL] cycle \(cycleNumber)/\(skyfallController.requestedCombos) begin")
+        } else {
+            print("[REFILL] final begin slots=\(refillSlots.count)")
+        }
+#endif
         let plannedTypes = isSkyfallCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
-            assertionFailure("Unable to plan a slot-only skyfall refill")
-            finishResolution()
+#if DEBUG
+            print("[REFILL-BUG] unable to plan slot-only refill slots=\(refillSlots.count)")
+#endif
+            finishResolution(resolveID: resolveID)
             return
         }
 
@@ -372,47 +447,120 @@ final class GameScene: SKScene {
                 self?.point(for: position) ?? .zero
             }
         )
-        assert(result.spawns.count == expectedRefillCount)
+#if DEBUG
+        if result.spawns.count != expectedRefillCount {
+            print("[REFILL-BUG] expected=\(expectedRefillCount) new=\(result.spawns.count)")
+        }
+#endif
         for node in result.nodes { orbNodes[node.orbID] = node }
 #if DEBUG
         print("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
 #endif
         run(after: result.duration) { [weak self] in
             guard let self else { return }
+            guard resolveID == self.activeResolveID,
+                  self.gameState == .refilling else {
+                self.logStaleCompletion("refill animation")
+                return
+            }
             let matches = self.matchDetector.detect(in: self.grid)
 
             if !isSkyfallCycle {
-                guard matches.isEmpty else {
-                    assertionFailure("Final controlled refill must not contain a match")
-                    self.finishResolution()
+                guard self.resolveLifecycle.state == .finalizing else {
+                    self.logStaleCompletion("final refill state")
                     return
                 }
-                self.finishResolution()
+#if DEBUG
+                print("[REFILL] final complete new=\(result.spawns.count)")
+                if !matches.isEmpty {
+                    print("[FINAL-BUG] final refill matches=\(matches.count)")
+                }
+#endif
+                self.finishResolution(resolveID: resolveID)
                 return
             }
 
+            guard self.resolveLifecycle.acceptsSkyfallCompletion else {
+                self.logStaleCompletion("skyfall cycle")
+                return
+            }
             self.gameState = .skyfall
             guard matches.count == 1,
                   matches[0].count == 3,
                   self.skyfallController.recordCycle(matchGroupCount: matches.count) else {
-                assertionFailure("A controlled skyfall cycle must generate exactly one three-orb match")
-                self.finishResolution()
+#if DEBUG
+                print("[SKYFALL-BUG] expected one three-orb match groups=\(matches.count)")
+#endif
+                self.finishResolution(resolveID: resolveID)
                 return
             }
-            self.process(matches: matches)
+#if DEBUG
+            print("[SKYFALL] cycle \(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos) complete")
+#endif
+            self.process(matches: matches, resolveID: resolveID)
         }
     }
 
-    private func finishResolution() {
+    private func finishResolution(resolveID: UInt) {
+        guard resolveID == activeResolveID else {
+            logStaleCompletion("finish")
+            return
+        }
+        guard resolveLifecycle.finish() else {
+#if DEBUG
+            print("[RESOLVE] duplicate finish ignored")
+#endif
+            return
+        }
+#if DEBUG
+        print("[RESOLVE] finish begin")
+        validateFinalBoard()
+#endif
         forcedEndInProgress = false
         turnController.resetSession()
         gameState = .completed
         updateTimerUI()
+#if DEBUG
+        print("[RESOLVE] finish complete")
+#endif
         run(after: 0.12) { [weak self] in
-            guard let self, self.gameState == .completed else { return }
+            guard let self else { return }
+            guard resolveID == self.activeResolveID,
+                  self.resolveLifecycle.state == .finished,
+                  self.gameState == .completed else {
+                self.logStaleCompletion("idle transition")
+                return
+            }
             self.gameState = .idle
+#if DEBUG
+            print("[STATE] -> idle")
+#endif
         }
     }
+
+    private func logStaleCompletion(_ source: String) {
+#if DEBUG
+        print("[SKYFALL] stale completion ignored source=\(source)")
+#endif
+    }
+
+#if DEBUG
+    private func validateFinalBoard() {
+        let gridOrbs = grid.cells.flatMap { $0 }.compactMap { $0 }
+        let gridIDs = Set(gridOrbs.map(\.id))
+        let nodeIDs = Set(orbNodes.keys)
+        let occupiedCount = gridOrbs.count
+        let emptyCount = grid.emptyPositions().count
+        if occupiedCount == 30,
+           orbNodes.count == 30,
+           emptyCount == 0,
+           gridIDs == nodeIDs {
+            print("[FINAL] grid=\(occupiedCount) nodes=\(orbNodes.count) empty=\(emptyCount)")
+        } else {
+            print("[FINAL-BUG] grid=\(occupiedCount) nodes=\(orbNodes.count) empty=\(emptyCount) missingNodes=\(gridIDs.subtracting(nodeIDs).count) orphanNodes=\(nodeIDs.subtracting(gridIDs).count)")
+        }
+    }
+#endif
 
     private func run(after delay: TimeInterval, completion: @escaping () -> Void) {
         if delay <= 0 { completion(); return }

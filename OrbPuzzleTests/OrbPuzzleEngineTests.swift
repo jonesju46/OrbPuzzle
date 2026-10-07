@@ -381,6 +381,72 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
+    func testSkyfallOneFinalizesOnceWithoutStartingAnotherCycle() {
+        let outcome = simulateSkyfallFinalization(requested: 1)
+
+        XCTAssertEqual(outcome.cycleCount, 1)
+        XCTAssertEqual(outcome.nextCycleCount, 0)
+        XCTAssertEqual(outcome.lifecycle.finalRefillCount, 1)
+        XCTAssertEqual(outcome.lifecycle.finishCount, 1)
+        XCTAssertEqual(outcome.lifecycle.state, .finished)
+    }
+
+    func testSkyfallNineteenFinalizesExactlyOnce() {
+        let outcome = simulateSkyfallFinalization(requested: 19)
+
+        XCTAssertEqual(outcome.cycleCount, 19)
+        XCTAssertEqual(outcome.nextCycleCount, 18)
+        XCTAssertEqual(outcome.lifecycle.finalRefillCount, 1)
+        XCTAssertEqual(outcome.lifecycle.finishCount, 1)
+        XCTAssertEqual(outcome.lifecycle.state, .finished)
+    }
+
+    func testSkyfallTwoAndNinetyNineUseTheSameFinalizationBoundary() {
+        for requested in [2, 99] {
+            let outcome = simulateSkyfallFinalization(requested: requested)
+            XCTAssertEqual(outcome.cycleCount, requested)
+            XCTAssertEqual(outcome.nextCycleCount, requested - 1)
+            XCTAssertEqual(outcome.lifecycle.finalRefillCount, 1)
+            XCTAssertEqual(outcome.lifecycle.finishCount, 1)
+        }
+    }
+
+    func testDuplicateFinishResolveIsSafelyIgnored() {
+        var lifecycle = ResolveLifecycle()
+        lifecycle.start()
+        XCTAssertTrue(lifecycle.beginFinalization())
+        XCTAssertTrue(lifecycle.finish())
+        XCTAssertFalse(lifecycle.finish())
+        XCTAssertEqual(lifecycle.finishCount, 1)
+    }
+
+    func testStaleSkyfallCompletionIsRejectedAfterFinalizationStarts() {
+        var lifecycle = ResolveLifecycle()
+        lifecycle.start()
+        let grid = OrbGrid()
+        grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
+        let IDsBeforeStaleCompletion = allOrbIDs(in: grid)
+        XCTAssertTrue(lifecycle.acceptsSkyfallCompletion)
+        XCTAssertTrue(lifecycle.beginFinalization())
+        XCTAssertFalse(lifecycle.acceptsSkyfallCompletion)
+        XCTAssertFalse(lifecycle.beginFinalization())
+        XCTAssertEqual(lifecycle.finalRefillCount, 1)
+
+        if lifecycle.acceptsSkyfallCompletion {
+            _ = grid.remove([GridPosition(row: 0, column: 0)])
+        }
+        XCTAssertEqual(allOrbIDs(in: grid), IDsBeforeStaleCompletion)
+        XCTAssertEqual(grid.emptyPositions().count, 0)
+    }
+
+    func testFinalBoardHasThirtyOccupiedCellsAndNoEmptySlots() {
+        let grid = OrbGrid()
+        grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
+
+        XCTAssertEqual(grid.cells.flatMap { $0 }.compactMap { $0 }.count, 30)
+        XCTAssertEqual(grid.emptyPositions().count, 0)
+    }
+
     func testSkyfallControllerRejectsOvershoot() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 1)
@@ -507,6 +573,29 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     private func allOrbIDs(in grid: OrbGrid) -> Set<UUID> {
         Set(grid.cells.flatMap { $0 }.compactMap { $0?.id })
+    }
+
+    private func simulateSkyfallFinalization(
+        requested: Int
+    ) -> (cycleCount: Int, nextCycleCount: Int, lifecycle: ResolveLifecycle) {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: requested)
+        var lifecycle = ResolveLifecycle()
+        lifecycle.start()
+        var cycleCount = 0
+        var nextCycleCount = 0
+
+        while controller.needsAnotherCycle {
+            XCTAssertTrue(controller.recordCycle(matchGroupCount: 1))
+            cycleCount += 1
+            if controller.needsAnotherCycle {
+                nextCycleCount += 1
+            } else {
+                XCTAssertTrue(lifecycle.beginFinalization())
+            }
+        }
+        XCTAssertTrue(lifecycle.finish())
+        return (cycleCount, nextCycleCount, lifecycle)
     }
 
     private func makeMatch(type: OrbType, group: Int) -> MatchResult {
