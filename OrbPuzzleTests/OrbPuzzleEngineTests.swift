@@ -3,6 +3,13 @@ import XCTest
 @testable import OrbPuzzle
 
 final class OrbPuzzleEngineTests: XCTestCase {
+    func testGameplaySettingDefaultsAndRanges() {
+        XCTAssertEqual(GameSettings.defaultTurnDuration, 10)
+        XCTAssertEqual(GameSettings.turnDurationRange, 5...99)
+        XCTAssertFalse(GameSettings.defaultNoResolveDuringTurn)
+        XCTAssertEqual(GameSettings.skyfallComboCountRange, 1...99)
+    }
+
     func testBoardDimensionsAndInitialBoardHasNoMatch() {
         let grid = OrbGrid()
         grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement()! }
@@ -185,27 +192,37 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(grid.orb(at: GridPosition(row: 4, column: 0)))
     }
 
-    func testControlledSkyfallBoardsContainExactMatchGroupCount() {
-        for expected in 0...SkyfallController.maximumGroupsPerBoard {
-            let types = SkyfallController.makeBoardTypes(matchGroupCount: expected)
-            XCTAssertEqual(MatchDetector().detect(in: OrbGrid(types: types)).count, expected)
+    func testSafeSkyfallRefillContainsNoMatch() {
+        var generator = SeededGenerator(seed: 7)
+        for _ in 0..<100 {
+            let types = SkyfallController.makeSafeBoardTypes(using: &generator)
+            XCTAssertTrue(MatchDetector().detect(in: OrbGrid(types: types)).isEmpty)
         }
     }
 
-    func testGuaranteedSkyfallCountsIncludingNinetyNine() {
-        for requested in [1, 10, 15, 99] {
+    func testEveryControlledSkyfallCycleContainsExactlyOneMatchGroup() {
+        var generator = SeededGenerator(seed: 19)
+        for _ in 0..<200 {
+            let types = SkyfallController.makeSingleMatchBoardTypes(using: &generator)
+            XCTAssertEqual(MatchDetector().detect(in: OrbGrid(types: types)).count, 1)
+        }
+    }
+
+    func testGuaranteedSkyfallUsesOneCyclePerComboThroughNinetyNine() {
+        var generator = SeededGenerator(seed: 99)
+        for requested in [1, 10, 19, 99] {
             let controller = SkyfallController()
             controller.reset(requestedCombos: requested)
-            var batchCount = 0
-            while !controller.isComplete {
-                let expectedBatch = controller.nextBatchSize()
-                let board = OrbGrid(types: SkyfallController.makeBoardTypes(matchGroupCount: expectedBatch))
-                let actualBatch = MatchDetector().detect(in: board).count
-                XCTAssertEqual(actualBatch, expectedBatch)
-                XCTAssertTrue(controller.recordGenerated(actualBatch))
-                batchCount += 1
-                XCTAssertLessThanOrEqual(batchCount, 10)
+            var cycleCount = 0
+            while controller.needsAnotherCycle {
+                let boardTypes = SkyfallController.makeSingleMatchBoardTypes(using: &generator)
+                let matchCount = MatchDetector().detect(in: OrbGrid(types: boardTypes)).count
+                XCTAssertEqual(matchCount, 1)
+                XCTAssertTrue(controller.recordCycle(matchGroupCount: matchCount))
+                cycleCount += 1
+                XCTAssertLessThanOrEqual(cycleCount, requested)
             }
+            XCTAssertEqual(cycleCount, requested)
             XCTAssertEqual(controller.generatedCombos, requested)
             XCTAssertEqual(controller.remainingCombos, 0)
         }
@@ -213,13 +230,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     func testSkyfallControllerRejectsOvershoot() {
         let controller = SkyfallController()
-        controller.reset(requestedCombos: 15)
-        XCTAssertTrue(controller.recordGenerated(13))
-        XCTAssertFalse(controller.recordGenerated(3))
-        XCTAssertEqual(controller.generatedCombos, 13)
-        XCTAssertEqual(controller.nextBatchSize(), 2)
-        XCTAssertTrue(controller.recordGenerated(2))
-        XCTAssertEqual(controller.generatedCombos, 15)
+        controller.reset(requestedCombos: 1)
+        XCTAssertFalse(controller.recordCycle(matchGroupCount: 0))
+        XCTAssertFalse(controller.recordCycle(matchGroupCount: 2))
+        XCTAssertTrue(controller.recordCycle(matchGroupCount: 1))
+        XCTAssertFalse(controller.recordCycle(matchGroupCount: 1))
+        XCTAssertEqual(controller.generatedCombos, 1)
     }
 
     func testInitialPlusSkyfallExamplesHaveNoComboCap() {
@@ -231,10 +247,21 @@ final class OrbPuzzleEngineTests: XCTestCase {
         ] {
             let controller = SkyfallController()
             controller.reset(requestedCombos: skyfall)
-            while !controller.isComplete {
-                XCTAssertTrue(controller.recordGenerated(controller.nextBatchSize()))
+            while controller.needsAnotherCycle {
+                XCTAssertTrue(controller.recordCycle(matchGroupCount: 1))
             }
             XCTAssertEqual(initial + controller.generatedCombos, expectedTotal)
         }
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state = state &* 6_364_136_223_846_793_005 &+ 1
+        return state
     }
 }

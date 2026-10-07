@@ -17,6 +17,7 @@ struct GameView: View {
             )
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contentShape(Rectangle())
+            .allowsHitTesting(true)
             .onAppear {
                 resizeScene(to: geometry.size)
                 applySettings()
@@ -25,6 +26,7 @@ struct GameView: View {
                 resizeScene(to: newSize)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("OrbPuzzle")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

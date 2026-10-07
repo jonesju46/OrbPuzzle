@@ -167,7 +167,7 @@ final class GameScene: SKScene {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard gameState == .idle, let touch = touches.first else { return }
+        guard gameState == .idle || gameState == .turnActive, let touch = touches.first else { return }
         let location = touch.location(in: self)
         guard let position = gridPosition(at: location), let orb = grid.orb(at: position), let node = orbNodes[orb.id] else { return }
         gameState = .selected
@@ -237,8 +237,10 @@ final class GameScene: SKScene {
         }
         turnController.endGesture()
         updateTimerUI()
-        if noResolveDuringTurn || !turnController.isTiming {
+        if noResolveDuringTurn, turnController.isTiming {
             // Finger-up ends only this drag. The board and timer remain live until expiry.
+            gameState = .turnActive
+        } else if !turnController.isTiming {
             gameState = .idle
         } else {
             expireTurnSession()
@@ -306,8 +308,10 @@ final class GameScene: SKScene {
 
     private func refillAndContinue() {
         gameState = .refilling
-        let batchSize = skyfallController.nextBatchSize()
-        let boardTypes = SkyfallController.makeBoardTypes(matchGroupCount: batchSize)
+        let isSkyfallCycle = skyfallController.needsAnotherCycle
+        let boardTypes = isSkyfallCycle
+            ? SkyfallController.makeSingleMatchBoardTypes()
+            : SkyfallController.makeSafeBoardTypes()
 
         // Guaranteed skyfall uses a complete controlled refill. Every orb is a new
         // falling node, so the requested combos are produced by real board matches.
@@ -331,7 +335,7 @@ final class GameScene: SKScene {
             guard let self else { return }
             let matches = self.matchDetector.detect(in: self.grid)
 
-            if batchSize == 0 {
+            if !isSkyfallCycle {
                 guard matches.isEmpty else {
                     assertionFailure("Final controlled refill must not contain a match")
                     self.finishResolution()
@@ -341,10 +345,10 @@ final class GameScene: SKScene {
                 return
             }
 
-            self.gameState = .cascading
-            guard matches.count == batchSize,
-                  self.skyfallController.recordGenerated(matches.count) else {
-                assertionFailure("Controlled skyfall generated \(matches.count), expected \(batchSize)")
+            self.gameState = .skyfall
+            guard matches.count == 1,
+                  self.skyfallController.recordCycle(matchGroupCount: matches.count) else {
+                assertionFailure("A controlled skyfall cycle must generate exactly one match group")
                 self.finishResolution()
                 return
             }
@@ -355,8 +359,12 @@ final class GameScene: SKScene {
     private func finishResolution() {
         forcedEndInProgress = false
         turnController.resetSession()
-        gameState = .idle
+        gameState = .completed
         updateTimerUI()
+        run(after: 0.12) { [weak self] in
+            guard let self, self.gameState == .completed else { return }
+            self.gameState = .idle
+        }
     }
 
     private func run(after delay: TimeInterval, completion: @escaping () -> Void) {
@@ -396,7 +404,7 @@ final class GameScene: SKScene {
         debugLabels[2].text = String(format: "Time %.1f", turnController.remainingTime)
         debugLabels[3].text = "Combo \(comboController.comboCount)"
         debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
-        debugLabels[5].text = noResolveDuringTurn ? "Resolve at zero" : "Resolve on lift"
+        debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
 #endif
     }
 }
