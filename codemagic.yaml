@@ -1,0 +1,51 @@
+﻿workflows:
+  ios-device-unsigned:
+    name: OrbPuzzle iPhone Device Unsigned
+
+    environment:
+      xcode: latest
+
+    scripts:
+      - name: Build iPhone device app
+        script: |
+          xcodebuild build \
+            -project "OrbPuzzle.xcodeproj" \
+            -scheme "OrbPuzzle" \
+            -configuration "Debug" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath "build/DeviceDerivedData" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned IPA
+        script: |
+          APP_PATH="$(find build/DeviceDerivedData/Build/Products \
+            -type d \
+            -path "*/Debug-iphoneos/OrbPuzzle.app" \
+            -print \
+            -quit)"
+
+          if [ -z "$APP_PATH" ]; then
+            echo "OrbPuzzle.app not found"
+            exit 1
+          fi
+
+          rm -rf build/device-package
+          mkdir -p build/device-package/Payload
+          mkdir -p build/device-artifacts
+
+          ditto \
+            "$APP_PATH" \
+            build/device-package/Payload/OrbPuzzle.app
+
+          cd build/device-package
+
+          zip -qry \
+            "../device-artifacts/OrbPuzzle-unsigned.ipa" \
+            Payload
+
+    artifacts:
+      - build/device-artifacts/*.ipa
+      - build/DeviceDerivedData/Build/Products/Debug-iphoneos/*.app
