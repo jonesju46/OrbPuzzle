@@ -1,4 +1,6 @@
-enum GameState: String {
+import Foundation
+
+enum GameState: String, Equatable {
     case idle
     case selected
     case turnActive
@@ -9,6 +11,35 @@ enum GameState: String {
     case refilling
     case skyfall
     case completed
+}
+
+/// Monotonically identifies the currently active game. Delayed work captures an
+/// ID and must be ignored after a new session begins.
+struct GameSessionFence: Equatable, Sendable {
+    private(set) var id: UInt = 0
+
+    @discardableResult
+    mutating func beginNewSession() -> UInt {
+        id &+= 1
+        return id
+    }
+
+    func accepts(_ candidate: UInt) -> Bool {
+        candidate == id
+    }
+}
+
+struct GameSessionSnapshot: Equatable {
+    let sessionID: UInt
+    let orbIDs: Set<UUID>
+    let state: GameState
+    let comboCount: Int
+    let generatedSkyfall: Int
+    let requestedSkyfall: Int
+    let remainingTime: TimeInterval
+    let progress: Double
+    let resolveID: UInt
+    let resolveLifecycleState: SkyfallFinalizationState
 }
 
 enum SkyfallFinalizationState: Equatable, Sendable {

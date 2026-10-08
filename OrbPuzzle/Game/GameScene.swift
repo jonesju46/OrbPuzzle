@@ -32,6 +32,7 @@ final class GameScene: SKScene {
     private var requestedSkyfallCombos = GameSettings.defaultSkyfallComboCount
     private var lastUpdateTime: TimeInterval = 0
     private var forcedEndInProgress = false
+    private var gameSessionFence = GameSessionFence()
     private var resolveGeneration: UInt = 0
     private var activeResolveID: UInt = 0
     private var resolveLifecycle = ResolveLifecycle()
@@ -55,12 +56,73 @@ final class GameScene: SKScene {
         updateDebugOverlay()
     }
 
+    var sessionSnapshot: GameSessionSnapshot {
+        GameSessionSnapshot(
+            sessionID: gameSessionFence.id,
+            orbIDs: Set(grid.cells.flatMap { $0 }.compactMap { $0?.id }),
+            state: gameState,
+            comboCount: comboController.comboCount,
+            generatedSkyfall: skyfallController.generatedCombos,
+            requestedSkyfall: requestedSkyfallCombos,
+            remainingTime: turnController.remainingTime,
+            progress: turnController.progress,
+            resolveID: activeResolveID,
+            resolveLifecycleState: resolveLifecycle.state
+        )
+    }
+
+    /// Starts a genuinely new session even when SwiftUI retains this scene.
+    func startNewGame() {
+        let oldOrbIDs = sessionSnapshot.orbIDs
+        gameSessionFence.beginNewSession()
+
+        // Invalidate resolve IDs before removing actions so an already-delivered
+        // completion cannot mutate the replacement board.
+        resolveGeneration &+= 1
+        activeResolveID = resolveGeneration
+        removeAllActions()
+        boardNode.removeAllActions()
+        comboLabel.removeAllActions()
+        timerLabel.removeAllActions()
+        timerTrack.removeAllActions()
+        timerFill.removeAllActions()
+        for node in orbNodes.values {
+            node.removeAllActions()
+            node.removeFromParent()
+        }
+        orbNodes.removeAll(keepingCapacity: true)
+
+        forcedEndInProgress = false
+        resolveLifecycle = ResolveLifecycle()
+        comboController.reset()
+        skyfallController.reset(requestedCombos: requestedSkyfallCombos)
+        turnController.resetSession()
+        comboLabel.text = "Combo 0"
+        comboLabel.alpha = 1
+        comboLabel.setScale(1)
+
+        grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
+        layoutAllOrbs(rebuild: true)
+        gameState = .idle
+        updateTimerUI()
+        updateDebugOverlay()
+
+#if DEBUG
+        let newOrbIDs = sessionSnapshot.orbIDs
+        assert(newOrbIDs.count == OrbGrid.defaultRows * OrbGrid.defaultColumns)
+        assert(oldOrbIDs.isDisjoint(with: newOrbIDs))
+        assert(matchDetector.detect(in: grid).isEmpty)
+#endif
+    }
+
     override func didMove(to view: SKView) {
         view.preferredFramesPerSecond = 60
         guard boardNode.parent == nil else { return }
         addChild(boardNode)
         setupInterface()
-        createInitialBoard()
+        // startNewGame may run from SwiftUI onAppear just before SpriteKit attaches.
+        // In that ordering the models already exist and only their nodes need layout.
+        layoutAllOrbs(rebuild: true)
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -130,11 +192,6 @@ final class GameScene: SKScene {
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - 18 - CGFloat(index) * 12)
         }
 #endif
-    }
-
-    private func createInitialBoard() {
-        grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
-        layoutAllOrbs(rebuild: true)
     }
 
     private func layoutAllOrbs(rebuild: Bool = false) {
@@ -605,8 +662,16 @@ final class GameScene: SKScene {
 #endif
 
     private func run(after delay: TimeInterval, completion: @escaping () -> Void) {
-        if delay <= 0 { completion(); return }
-        run(.sequence([.wait(forDuration: delay), .run(completion)]))
+        let sessionID = gameSessionFence.id
+        let guardedCompletion = { [weak self] in
+            guard let self, self.gameSessionFence.accepts(sessionID) else {
+                self?.logStaleCompletion("game session")
+                return
+            }
+            completion()
+        }
+        if delay <= 0 { guardedCompletion(); return }
+        run(.sequence([.wait(forDuration: delay), .run(guardedCompletion)]))
     }
 
     override func update(_ currentTime: TimeInterval) {

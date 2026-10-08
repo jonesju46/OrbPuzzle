@@ -3,6 +3,97 @@ import XCTest
 @testable import OrbPuzzle
 
 final class OrbPuzzleEngineTests: XCTestCase {
+    func testNewGameCreatesThirtyNewOrbIDsAndResetsTransientState() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        scene.configure(turnDuration: 10, noResolveDuringTurn: false, skyfallComboCount: 19)
+        scene.startNewGame()
+        let before = scene.sessionSnapshot
+
+        scene.startNewGame()
+        let after = scene.sessionSnapshot
+
+        XCTAssertEqual(before.orbIDs.count, 30)
+        XCTAssertEqual(after.orbIDs.count, 30)
+        XCTAssertTrue(before.orbIDs.isDisjoint(with: after.orbIDs))
+        XCTAssertEqual(after.state, .idle)
+        XCTAssertEqual(after.comboCount, 0)
+        XCTAssertEqual(after.generatedSkyfall, 0)
+        XCTAssertEqual(after.requestedSkyfall, 19)
+        XCTAssertEqual(after.remainingTime, 10, accuracy: 0.001)
+        XCTAssertEqual(after.progress, 1, accuracy: 0.001)
+        XCTAssertEqual(after.resolveLifecycleState, .idle)
+        XCTAssertGreaterThan(after.resolveID, before.resolveID)
+    }
+
+    func testComboResetClearsPreviousTwelve() {
+        let controller = ComboController()
+        let matches = (0..<12).map { makeMatch(type: .fire, group: $0) }
+        XCTAssertEqual(controller.add(matches), 12)
+
+        controller.reset()
+
+        XCTAssertEqual(controller.comboCount, 0)
+    }
+
+    func testSkyfallResetClearsSevenOfNineteenProgress() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 19)
+        for _ in 0..<7 { XCTAssertTrue(controller.recordCycle(matchGroupCount: 1)) }
+        XCTAssertEqual(controller.generatedCombos, 7)
+
+        controller.reset(requestedCombos: 19)
+
+        XCTAssertEqual(controller.generatedCombos, 0)
+        XCTAssertEqual(controller.requestedCombos, 19)
+    }
+
+    func testNewGameUsesConfiguredTurnDuration() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        scene.configure(turnDuration: 20, noResolveDuringTurn: true, skyfallComboCount: 19)
+
+        scene.startNewGame()
+
+        XCTAssertEqual(scene.sessionSnapshot.remainingTime, 20, accuracy: 0.001)
+        XCTAssertEqual(scene.sessionSnapshot.progress, 1, accuracy: 0.001)
+        XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 19)
+    }
+
+    func testOldCallbackIsRejectedAfterNewSessionBegins() {
+        var fence = GameSessionFence()
+        let oldSessionID = fence.beginNewSession()
+        XCTAssertTrue(fence.accepts(oldSessionID))
+
+        let currentSessionID = fence.beginNewSession()
+
+        XCTAssertFalse(fence.accepts(oldSessionID))
+        XCTAssertTrue(fence.accepts(currentSessionID))
+    }
+
+    func testApplyingSettingsDoesNotReplaceCurrentBoard() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        scene.startNewGame()
+        let before = scene.sessionSnapshot
+
+        scene.configure(turnDuration: 20, noResolveDuringTurn: true, skyfallComboCount: 19)
+        let after = scene.sessionSnapshot
+
+        XCTAssertEqual(after.sessionID, before.sessionID)
+        XCTAssertEqual(after.orbIDs, before.orbIDs)
+        XCTAssertEqual(after.remainingTime, 20, accuracy: 0.001)
+    }
+
+    func testStartingAgainAfterLeavingCreatesEntirelyNewBoard() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        scene.startNewGame()
+        let firstGame = scene.sessionSnapshot
+
+        scene.startNewGame()
+        let secondGame = scene.sessionSnapshot
+
+        XCTAssertEqual(secondGame.sessionID, firstGame.sessionID + 1)
+        XCTAssertTrue(firstGame.orbIDs.isDisjoint(with: secondGame.orbIDs))
+    }
+
     func testGameplaySettingDefaultsAndRanges() {
         XCTAssertEqual(GameSettings.defaultTurnDuration, 10)
         XCTAssertEqual(GameSettings.turnDurationRange, 5...99)

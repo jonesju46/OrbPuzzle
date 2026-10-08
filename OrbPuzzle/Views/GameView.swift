@@ -7,6 +7,7 @@ struct GameView: View {
     @AppStorage(GameSettings.skyfallComboCountKey) private var skyfallComboCount = GameSettings.defaultSkyfallComboCount
     @State private var scene = GameScene(size: CGSize(width: 390, height: 844))
     @State private var isShowingSettings = false
+    @State private var isGameplayVisible = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -21,6 +22,9 @@ struct GameView: View {
             .onAppear {
                 resizeScene(to: geometry.size)
                 applySettings()
+                guard !isGameplayVisible else { return }
+                isGameplayVisible = true
+                scene.startNewGame()
             }
             .onChange(of: geometry.size) { _, newSize in
                 resizeScene(to: newSize)
@@ -30,7 +34,16 @@ struct GameView: View {
         .navigationTitle("OrbPuzzle")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    scene.startNewGame()
+                } label: {
+                    Text("New Game")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New Game")
+
                 Button {
                     isShowingSettings = true
                 } label: {
@@ -59,6 +72,11 @@ struct GameView: View {
         .onChange(of: turnDuration) { _, _ in applySettings() }
         .onChange(of: noResolveDuringTurn) { _, _ in applySettings() }
         .onChange(of: skyfallComboCount) { _, _ in applySettings() }
+        .onDisappear {
+            // A sheet does not remove GameView. A real navigation departure does,
+            // so the next Start Game appearance must create another session.
+            if !isShowingSettings { isGameplayVisible = false }
+        }
     }
 
     private func resizeScene(to size: CGSize) {
