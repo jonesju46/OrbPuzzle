@@ -11,7 +11,7 @@ final class SkyfallController {
 
     var remainingCombos: Int { max(0, requestedCombos - generatedCombos) }
     var needsAnotherCycle: Bool { generatedCombos < requestedCombos }
-    var isComplete: Bool { generatedCombos == requestedCombos }
+    var isComplete: Bool { generatedCombos >= requestedCombos }
 
     func reset(requestedCombos: Int) {
         self.requestedCombos = min(max(requestedCombos, 0), 99)
@@ -19,9 +19,9 @@ final class SkyfallController {
     }
 
     @discardableResult
-    func recordCycle(matchGroupCount: Int) -> Bool {
-        guard needsAnotherCycle, matchGroupCount == 1 else { return false }
-        generatedCombos += 1
+    func recordDetectedGroups(_ matchGroupCount: Int) -> Bool {
+        guard requestedCombos > 0, matchGroupCount > 0 else { return false }
+        generatedCombos += matchGroupCount
         return true
     }
 
@@ -40,29 +40,95 @@ final class SkyfallController {
         refillSlots: [GridPosition],
         using generator: inout R
     ) -> [OrbType]? {
-        guard refillSlots == grid.emptyPositions(), refillSlots.count >= 3 else { return nil }
-        let candidates = tripleCandidates(in: Set(refillSlots)).shuffled(using: &generator)
+        guard needsAnotherCycle,
+              refillSlots == grid.emptyPositions(),
+              !refillSlots.isEmpty,
+              MatchDetector().detect(in: grid).isEmpty else { return nil }
 
-        for target in candidates {
-            for targetType in OrbType.allCases.shuffled(using: &generator) {
-                for _ in 0..<32 {
-                    guard let planned = planTypes(
-                        grid: grid,
-                        refillSlots: refillSlots,
-                        forcedTypes: Dictionary(uniqueKeysWithValues: target.map { ($0, targetType) }),
-                        using: &generator
-                    ) else { continue }
-                    let simulated = simulatedGrid(grid: grid, slots: refillSlots, types: planned)
-                    let matches = MatchDetector().detect(in: simulated)
-                    guard matches.count == 1,
-                          matches[0].count == 3,
-                          matches[0].positions == Set(target),
-                          isStableAfterRemoving(matches[0], from: simulated) else { continue }
-                    return planned
+        let maximumGroupCount = min(
+            remainingCombos,
+            refillSlots.count,
+            (grid.rows * grid.columns) / 3
+        )
+        guard maximumGroupCount > 0 else { return nil }
+
+        if refillSlots.count <= 4 {
+            return exhaustivePlan(
+                grid: grid,
+                refillSlots: refillSlots,
+                maximumGroupCount: maximumGroupCount
+            )
+        }
+
+        let candidates = tripleCandidates(in: Set(refillSlots))
+        var bestPlan: [OrbType]?
+        var bestScore = (groups: 0, removed: 0)
+
+        // Prefer the largest legal batch, but keep the work per animation cycle
+        // bounded. The outer resolve pipeline remains completion-driven, so a
+        // target of 99 never becomes a synchronous 99-cycle loop.
+        for desiredGroupCount in stride(from: maximumGroupCount, through: 1, by: -1) {
+            var bestDesiredPlan: [OrbType]?
+            var bestDesiredRemoved = 0
+
+            for _ in 0..<96 {
+                guard let groups = selectDisjointCandidates(
+                    count: desiredGroupCount,
+                    from: candidates,
+                    using: &generator
+                ) else { break }
+                let forcedTypes = forcedTypeAssignments(
+                    for: groups,
+                    using: &generator
+                )
+                guard let planned = planTypes(
+                    grid: grid,
+                    refillSlots: refillSlots,
+                    forcedTypes: forcedTypes,
+                    using: &generator
+                ) else { continue }
+                let score = planScore(
+                    grid: grid,
+                    refillSlots: refillSlots,
+                    types: planned,
+                    maximumGroupCount: maximumGroupCount
+                )
+                guard score.groups > 0 else { continue }
+                if score.groups > bestScore.groups
+                    || (score.groups == bestScore.groups && score.removed > bestScore.removed) {
+                    bestPlan = planned
+                    bestScore = score
+                }
+                if score.groups == desiredGroupCount,
+                   score.removed > bestDesiredRemoved {
+                    bestDesiredPlan = planned
+                    bestDesiredRemoved = score.removed
                 }
             }
+            if let bestDesiredPlan { return bestDesiredPlan }
         }
-        return nil
+
+        // Groups can also be completed by existing orbs, so sample bounded full
+        // assignments after trying all-new disjoint triples. MatchDetector still
+        // validates the complete board and is the only source of the group count.
+        for _ in 0..<384 {
+            let planned = refillSlots.map { _ in
+                OrbType.allCases.randomElement(using: &generator) ?? .fire
+            }
+            let score = planScore(
+                grid: grid,
+                refillSlots: refillSlots,
+                types: planned,
+                maximumGroupCount: maximumGroupCount
+            )
+            if score.groups > bestScore.groups
+                || (score.groups == bestScore.groups && score.removed > bestScore.removed) {
+                bestPlan = planned
+                bestScore = score
+            }
+            if bestScore.groups == maximumGroupCount { break }
+        }
+        return bestPlan
     }
 
     func makeSafeRefill<R: RandomNumberGenerator>(
@@ -101,6 +167,107 @@ final class SkyfallController {
             }
         }
         return result
+    }
+
+    private func exhaustivePlan(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        maximumGroupCount: Int
+    ) -> [OrbType]? {
+        var current = Array(repeating: OrbType.fire, count: refillSlots.count)
+        var bestPlan: [OrbType]?
+        var bestScore = (groups: 0, removed: 0)
+
+        func visit(_ index: Int) {
+            guard index < current.count else {
+                let score = planScore(
+                    grid: grid,
+                    refillSlots: refillSlots,
+                    types: current,
+                    maximumGroupCount: maximumGroupCount
+                )
+                if score.groups > bestScore.groups
+                    || (score.groups == bestScore.groups && score.removed > bestScore.removed) {
+                    bestPlan = current
+                    bestScore = score
+                }
+                return
+            }
+            for type in OrbType.allCases {
+                current[index] = type
+                visit(index + 1)
+            }
+        }
+
+        visit(0)
+        return bestPlan
+    }
+
+    private func selectDisjointCandidates<R: RandomNumberGenerator>(
+        count: Int,
+        from candidates: [[GridPosition]],
+        using generator: inout R
+    ) -> [[GridPosition]]? {
+        guard count > 0 else { return [] }
+        for _ in 0..<24 {
+            var selected: [[GridPosition]] = []
+            var occupied: Set<GridPosition> = []
+            for candidate in candidates.shuffled(using: &generator)
+            where Set(candidate).isDisjoint(with: occupied) {
+                selected.append(candidate)
+                occupied.formUnion(candidate)
+                if selected.count == count { return selected }
+            }
+        }
+        return nil
+    }
+
+    private func forcedTypeAssignments<R: RandomNumberGenerator>(
+        for groups: [[GridPosition]],
+        using generator: inout R
+    ) -> [GridPosition: OrbType] {
+        var assignments: [GridPosition: OrbType] = [:]
+        for group in groups {
+            let candidates = OrbType.allCases.shuffled(using: &generator)
+            let type = candidates.min { lhs, rhs in
+                adjacentConflictCount(type: lhs, group: group, assignments: assignments)
+                    < adjacentConflictCount(type: rhs, group: group, assignments: assignments)
+            } ?? .fire
+            for position in group { assignments[position] = type }
+        }
+        return assignments
+    }
+
+    private func adjacentConflictCount(
+        type: OrbType,
+        group: [GridPosition],
+        assignments: [GridPosition: OrbType]
+    ) -> Int {
+        group.reduce(into: 0) { count, position in
+            let neighbors = [
+                GridPosition(row: position.row - 1, column: position.column),
+                GridPosition(row: position.row + 1, column: position.column),
+                GridPosition(row: position.row, column: position.column - 1),
+                GridPosition(row: position.row, column: position.column + 1)
+            ]
+            count += neighbors.filter { assignments[$0] == type }.count
+        }
+    }
+
+    private func planScore(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        types: [OrbType],
+        maximumGroupCount: Int
+    ) -> (groups: Int, removed: Int) {
+        guard types.count == refillSlots.count else { return (0, 0) }
+        let simulated = simulatedGrid(grid: grid, slots: refillSlots, types: types)
+        let matches = MatchDetector().detect(in: simulated)
+        guard !matches.isEmpty, matches.count <= maximumGroupCount else { return (0, 0) }
+        let removedPositions = matches.reduce(into: Set<GridPosition>()) {
+            $0.formUnion($1.positions)
+        }
+        return (matches.count, removedPositions.count)
     }
 
     private func planTypes<R: RandomNumberGenerator>(
@@ -156,11 +323,5 @@ final class SkyfallController {
             }
         }
         return OrbGrid(types: completeTypes)
-    }
-
-    private func isStableAfterRemoving(_ match: MatchResult, from grid: OrbGrid) -> Bool {
-        _ = grid.remove(match.positions)
-        _ = grid.collapse()
-        return MatchDetector().detect(in: grid).isEmpty
     }
 }

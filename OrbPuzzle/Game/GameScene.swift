@@ -495,10 +495,9 @@ final class GameScene: SKScene {
             return
         }
 
-        // Try a controlled refill only while quota remains. If the preserved
-        // board already contains a gravity-created match, controlled planning
-        // cannot prove exactly one group and safely falls back to a normal slot
-        // refill. Actual resolve detection happens only after fall completion.
+        // Try a controlled refill only while quota remains. A preserved-board
+        // natural match makes the planner yield to a safe refill; the full-grid
+        // scan after the fall remains authoritative for every refill path.
         let controlledTypes = skyfallController.needsAnotherCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : nil
@@ -508,9 +507,8 @@ final class GameScene: SKScene {
         let isFinalRefill = !skyfallController.needsAnotherCycle
 
 #if DEBUG
-        let cycleNumber = skyfallController.generatedCombos + 1
         if isControlledSkyfallRefill {
-            print("[SKYFALL] cycle \(cycleNumber)/\(skyfallController.requestedCombos) begin")
+            print("[SKYFALL] controlled batch begin progress=\(skyfallController.generatedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
         } else if isNaturalChainRefill {
             print("[MATCH] safe chain refill before stable-board scan")
         } else {
@@ -563,17 +561,16 @@ final class GameScene: SKScene {
                     return
                 }
                 self.gameState = .skyfall
-                if matches.count == 1,
-                   matches[0].matchSize == 3,
-                   self.skyfallController.recordCycle(matchGroupCount: matches.count) {
+            }
+
+            // Initial/manual matches are processed before the first refill and
+            // never enter this counter. Every post-refill full-board detection,
+            // controlled or natural, contributes its actual normalized groups.
+            if self.skyfallController.recordDetectedGroups(matches.count) {
 #if DEBUG
-                    print("[SKYFALL] cycle \(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos) complete")
+                let source = isControlledSkyfallRefill ? "controlled" : "natural"
+                print("[SKYFALL] \(source) groups=\(matches.count) progress=\(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos)")
 #endif
-                } else {
-#if DEBUG
-                    print("[SKYFALL-BUG] controlled refill groups=\(matches.count); resolving detected board without skipping matches")
-#endif
-                }
             }
 
             // Every refill path ends at the same stable-board full-grid scan.
