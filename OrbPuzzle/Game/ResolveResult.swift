@@ -3,6 +3,7 @@ struct ResolvePhase: Equatable, Sendable {
     let matches: [MatchResult]
 
     var groupCount: Int { matches.count }
+    var comboIncrement: Int { groupCount }
     var removedPositions: Set<GridPosition> {
         matches.reduce(into: Set<GridPosition>()) {
             $0.formUnion($1.positions)

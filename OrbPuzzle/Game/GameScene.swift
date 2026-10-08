@@ -372,26 +372,15 @@ final class GameScene: SKScene {
         switch steps[index] {
         case let .remove(phase):
             gameState = .removing
+            comboController.add(groups: phase.comboIncrement)
+            comboController.animate(label: comboLabel)
             let removed = grid.remove(phase.removedPositions)
 #if DEBUG
             if removed.count != phase.removedOrbCount {
                 print("[RESOLVE-BUG] phase=\(phase.type.rawValue) expected=\(phase.removedOrbCount) removed=\(removed.count)")
             }
 #endif
-            for orb in removed {
-                guard let node = orbNodes[orb.id] else { continue }
-                node.run(.sequence([
-                    .scale(to: 1.12, duration: GameSettings.Tuning.resolveHighlightDuration),
-                    .group([
-                        .fadeOut(withDuration: GameSettings.Tuning.removeDuration),
-                        .scale(to: 0.2, duration: GameSettings.Tuning.removeDuration)
-                    ])
-                ]))
-            }
-
-            let phaseDuration = GameSettings.Tuning.resolveHighlightDuration
-                + GameSettings.Tuning.removeDuration
-            run(after: phaseDuration) { [weak self] in
+            animateRemovalBatch(removed) { [weak self] in
                 guard let self else { return }
                 guard resolveID == self.activeResolveID,
                       self.resolveLifecycle.acceptsSkyfallCompletion,
@@ -402,8 +391,6 @@ final class GameScene: SKScene {
                 for orb in removed {
                     self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
                 }
-                self.comboController.add(phase.matches)
-                self.comboController.animate(label: self.comboLabel)
 #if DEBUG
                 print("[RESOLVE] phase=\(phase.type.rawValue) groups=\(phase.groupCount)")
 #endif
@@ -451,6 +438,33 @@ final class GameScene: SKScene {
 
         case let .refill(expectedRefillCount: expectedRefillCount):
             refillAndContinue(expectedRefillCount: expectedRefillCount, resolveID: resolveID)
+        }
+    }
+
+    /// Starts every node in one attribute phase on the same frame and advances
+    /// only after the entire same-color batch has completed its animation.
+    private func animateRemovalBatch(_ removed: [Orb], completion: @escaping () -> Void) {
+        let nodes = removed.compactMap { orbNodes[$0.id] }
+        guard !nodes.isEmpty else {
+            completion()
+            return
+        }
+
+        let sessionID = gameSessionFence.id
+        let action = SKAction.sequence([
+            .scale(to: 1.12, duration: GameSettings.Tuning.resolveHighlightDuration),
+            .group([
+                .fadeOut(withDuration: GameSettings.Tuning.removeDuration),
+                .scale(to: 0.2, duration: GameSettings.Tuning.removeDuration)
+            ])
+        ])
+        var remainingNodeCount = nodes.count
+        for node in nodes {
+            node.run(action) { [weak self] in
+                guard let self, self.gameSessionFence.accepts(sessionID) else { return }
+                remainingNodeCount -= 1
+                if remainingNodeCount == 0 { completion() }
+            }
         }
     }
 

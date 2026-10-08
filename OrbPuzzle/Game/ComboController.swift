@@ -7,7 +7,12 @@ final class ComboController {
 
     @discardableResult
     func add(_ matches: [MatchResult]) -> Int {
-        comboCount += matches.count
+        add(groups: matches.count)
+    }
+
+    @discardableResult
+    func add(groups: Int) -> Int {
+        comboCount += max(0, groups)
         return comboCount
     }
 

@@ -454,6 +454,78 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(result.comboCount, 5)
     }
 
+    func testTwoWaterTriplesFormOneSixOrbAnimationBatchAndTwoCombos() {
+        let matches = [
+            MatchResult(
+                type: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })
+            ),
+            MatchResult(
+                type: .water,
+                positions: Set((3..<6).map { GridPosition(row: 1, column: $0) })
+            )
+        ]
+
+        let result = ResolveResult(matches: matches)
+
+        XCTAssertEqual(result.phases.count, 1)
+        XCTAssertEqual(result.phases[0].type, .water)
+        XCTAssertEqual(result.phases[0].comboIncrement, 2)
+        XCTAssertEqual(result.phases[0].removedOrbCount, 6)
+    }
+
+    func testWaterThreeAndFiveFormOneEightOrbAnimationBatchAndTwoCombos() {
+        let matches = [
+            MatchResult(
+                type: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })
+            ),
+            MatchResult(
+                type: .water,
+                positions: Set((0..<5).map { GridPosition(row: 1, column: $0) })
+            )
+        ]
+
+        let result = ResolveResult(matches: matches)
+
+        XCTAssertEqual(result.phases.count, 1)
+        XCTAssertEqual(result.phases[0].comboIncrement, 2)
+        XCTAssertEqual(result.phases[0].removedOrbCount, 8)
+    }
+
+    func testWaterAndFireGroupsBecomeTwoOrderedAttributeBatches() {
+        let matches = [
+            MatchResult(type: .fire, positions: Set((0..<3).map { GridPosition(row: 3, column: $0) })),
+            MatchResult(type: .water, positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
+            MatchResult(type: .fire, positions: Set((3..<6).map { GridPosition(row: 4, column: $0) })),
+            MatchResult(type: .water, positions: Set((3..<6).map { GridPosition(row: 1, column: $0) }))
+        ]
+
+        let result = ResolveResult(matches: matches)
+
+        XCTAssertEqual(result.phases.map(\.type), [.water, .fire])
+        XCTAssertEqual(result.phases.map(\.comboIncrement), [2, 2])
+        XCTAssertEqual(result.phases.map(\.removedOrbCount), [6, 6])
+    }
+
+    func testNormalizedLightTShapeUsesOneComboAndOneAnimationBatch() {
+        let positions: Set<GridPosition> = [
+            GridPosition(row: 2, column: 1),
+            GridPosition(row: 2, column: 2),
+            GridPosition(row: 2, column: 3),
+            GridPosition(row: 3, column: 2),
+            GridPosition(row: 4, column: 2)
+        ]
+        let matches = MatchDetector().detect(in: gridWith(type: .light, at: positions))
+
+        let result = ResolveResult(matches: matches)
+
+        XCTAssertEqual(result.phases.count, 1)
+        XCTAssertEqual(result.phases[0].type, .light)
+        XCTAssertEqual(result.phases[0].comboIncrement, 1)
+        XCTAssertEqual(result.phases[0].removedPositions, positions)
+    }
+
     func testResolvePipelineRunsGravityAndRefillExactlyOnceAfterAllPhases() {
         let result = ResolveResult(matches: [
             makeMatch(type: .heart, group: 0),
@@ -794,8 +866,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
     }
 
     private func gridWithHeart(at positions: Set<GridPosition>) -> OrbGrid {
+        gridWith(type: .heart, at: positions)
+    }
+
+    private func gridWith(type: OrbType, at positions: Set<GridPosition>) -> OrbGrid {
         var types = matchTestBoardTypes()
-        for position in positions { types[position.row][position.column] = .heart }
+        for position in positions { types[position.row][position.column] = type }
         return OrbGrid(types: types)
     }
 
