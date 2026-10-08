@@ -97,8 +97,94 @@ final class OrbPuzzleEngineTests: XCTestCase {
     func testGameplaySettingDefaultsAndRanges() {
         XCTAssertEqual(GameSettings.defaultTurnDuration, 10)
         XCTAssertEqual(GameSettings.turnDurationRange, 5...99)
+        XCTAssertFalse(GameSettings.defaultTurnTimeEnabled)
         XCTAssertFalse(GameSettings.defaultNoResolveDuringTurn)
+        XCTAssertFalse(GameSettings.defaultSkyfallComboEnabled)
         XCTAssertEqual(GameSettings.skyfallComboCountRange, 1...99)
+    }
+
+    func testTurnTimeToggleUsesFiveWhenOffAndStoredValueWhenOn() {
+        let storedTurnTime = 30.0
+        var enabled = true
+
+        XCTAssertEqual(
+            GameSettings.effectiveTurnDuration(enabled: enabled, configured: storedTurnTime),
+            30
+        )
+        enabled = false
+        XCTAssertEqual(GameSettings.effectiveTurnDuration(enabled: enabled, configured: storedTurnTime), 5)
+        enabled = true
+        XCTAssertEqual(GameSettings.effectiveTurnDuration(enabled: enabled, configured: storedTurnTime), 30)
+        XCTAssertEqual(storedTurnTime, 30)
+    }
+
+    func testSkyfallToggleUsesZeroWhenOffAndStoredValueWhenOn() {
+        let storedSkyfallCombo = 19
+        var enabled = true
+
+        XCTAssertEqual(
+            GameSettings.effectiveSkyfallComboCount(enabled: enabled, configured: storedSkyfallCombo),
+            19
+        )
+        enabled = false
+        XCTAssertEqual(GameSettings.effectiveSkyfallComboCount(enabled: enabled, configured: storedSkyfallCombo), 0)
+        enabled = true
+        XCTAssertEqual(GameSettings.effectiveSkyfallComboCount(enabled: enabled, configured: storedSkyfallCombo), 19)
+        XCTAssertEqual(storedSkyfallCombo, 19)
+    }
+
+    func testSkyfallOffDisablesControlledCyclesButNaturalMatchStillRequiresResolve() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        var types = matchTestBoardTypes()
+        for row in [0, 2, 4] { types[row][0] = .light }
+        for row in [1, 3] {
+            for column in 0...2 { types[row][column] = .water }
+        }
+        let grid = OrbGrid(types: types)
+        let initialResult = ResolveResult(matches: MatchDetector().detect(in: grid))
+        _ = grid.remove(initialResult.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        var generator = SeededGenerator(seed: 317)
+        guard let refillTypes = controller.makeSafeRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        ) else {
+            XCTFail("Expected a safe refill with controlled skyfall disabled")
+            return
+        }
+        _ = grid.refill(types: refillTypes, at: slots)
+        let naturalMatches = MatchDetector().detect(in: grid)
+
+        XCTAssertFalse(controller.needsAnotherCycle)
+        XCTAssertTrue(controller.isComplete)
+        XCTAssertEqual(controller.requestedCombos, 0)
+        XCTAssertEqual(naturalMatches.count, 1)
+        XCTAssertEqual(naturalMatches[0].type, .light)
+        XCTAssertFalse(StableBoardScan(matches: naturalMatches).canFinishResolve)
+    }
+
+    func testNewGameUsesEffectiveToggleValues() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        scene.configure(
+            turnDuration: GameSettings.effectiveTurnDuration(enabled: false, configured: 30),
+            noResolveDuringTurn: true,
+            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: false, configured: 19)
+        )
+        scene.startNewGame()
+        XCTAssertEqual(scene.sessionSnapshot.remainingTime, 5, accuracy: 0.001)
+        XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 0)
+
+        scene.configure(
+            turnDuration: GameSettings.effectiveTurnDuration(enabled: true, configured: 30),
+            noResolveDuringTurn: true,
+            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: true, configured: 19)
+        )
+        scene.startNewGame()
+        XCTAssertEqual(scene.sessionSnapshot.remainingTime, 30, accuracy: 0.001)
+        XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 19)
     }
 
     func testBoardDimensionsAndInitialBoardHasNoMatch() {
@@ -551,7 +637,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(result.comboCount, 5)
     }
 
-    func testTwoWaterTriplesFormOneSixOrbAnimationBatchAndTwoCombos() {
+    func testTwoWaterTriplesFormTwoSequentialRemovalStepsAndTwoCombos() {
         let matches = [
             MatchResult(
                 type: .water,
@@ -564,14 +650,18 @@ final class OrbPuzzleEngineTests: XCTestCase {
         ]
 
         let result = ResolveResult(matches: matches)
+        let removals = removalPhases(in: result)
 
         XCTAssertEqual(result.phases.count, 1)
         XCTAssertEqual(result.phases[0].type, .water)
         XCTAssertEqual(result.phases[0].comboIncrement, 2)
         XCTAssertEqual(result.phases[0].removedOrbCount, 6)
+        XCTAssertEqual(removals.map(\.type), [.water, .water])
+        XCTAssertEqual(removals.map(\.comboIncrement), [1, 1])
+        XCTAssertEqual(removals.map(\.removedOrbCount), [3, 3])
     }
 
-    func testWaterThreeAndFiveFormOneEightOrbAnimationBatchAndTwoCombos() {
+    func testWaterThreeAndFiveBecomeSeparateThreeThenFiveRemovalSteps() {
         let matches = [
             MatchResult(
                 type: .water,
@@ -579,33 +669,40 @@ final class OrbPuzzleEngineTests: XCTestCase {
             ),
             MatchResult(
                 type: .water,
-                positions: Set((0..<5).map { GridPosition(row: 1, column: $0) })
+                positions: Set((0..<5).map { GridPosition(row: 2, column: $0) })
             )
         ]
 
         let result = ResolveResult(matches: matches)
+        let removals = removalPhases(in: result)
 
         XCTAssertEqual(result.phases.count, 1)
         XCTAssertEqual(result.phases[0].comboIncrement, 2)
         XCTAssertEqual(result.phases[0].removedOrbCount, 8)
+        XCTAssertEqual(removals.map(\.type), [.water, .water])
+        XCTAssertEqual(removals.map(\.comboIncrement), [1, 1])
+        XCTAssertEqual(removals.map(\.removedOrbCount), [3, 5])
     }
 
-    func testWaterAndFireGroupsBecomeTwoOrderedAttributeBatches() {
+    func testTwoWaterThenThreeFireGroupsUseSequentialAttributeOrderedSteps() {
         let matches = [
-            MatchResult(type: .fire, positions: Set((0..<3).map { GridPosition(row: 3, column: $0) })),
+            MatchResult(type: .fire, positions: Set((0..<3).map { GridPosition(row: 1, column: $0) })),
             MatchResult(type: .water, positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
-            MatchResult(type: .fire, positions: Set((3..<6).map { GridPosition(row: 4, column: $0) })),
-            MatchResult(type: .water, positions: Set((3..<6).map { GridPosition(row: 1, column: $0) }))
+            MatchResult(type: .fire, positions: Set((0..<3).map { GridPosition(row: 3, column: $0) })),
+            MatchResult(type: .water, positions: Set((0..<3).map { GridPosition(row: 2, column: $0) })),
+            MatchResult(type: .fire, positions: Set((0..<3).map { GridPosition(row: 4, column: $0) }))
         ]
 
         let result = ResolveResult(matches: matches)
+        let removals = removalPhases(in: result)
 
         XCTAssertEqual(result.phases.map(\.type), [.water, .fire])
-        XCTAssertEqual(result.phases.map(\.comboIncrement), [2, 2])
-        XCTAssertEqual(result.phases.map(\.removedOrbCount), [6, 6])
+        XCTAssertEqual(result.phases.map(\.comboIncrement), [2, 3])
+        XCTAssertEqual(removals.map(\.type), [.water, .water, .fire, .fire, .fire])
+        XCTAssertEqual(removals.map(\.comboIncrement), [1, 1, 1, 1, 1])
     }
 
-    func testNormalizedLightTShapeUsesOneComboAndOneAnimationBatch() {
+    func testNormalizedLightTShapeUsesOneComboAndOneRemovalStep() {
         let positions: Set<GridPosition> = [
             GridPosition(row: 2, column: 1),
             GridPosition(row: 2, column: 2),
@@ -616,18 +713,39 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let matches = MatchDetector().detect(in: gridWith(type: .light, at: positions))
 
         let result = ResolveResult(matches: matches)
+        let removals = removalPhases(in: result)
 
         XCTAssertEqual(result.phases.count, 1)
         XCTAssertEqual(result.phases[0].type, .light)
         XCTAssertEqual(result.phases[0].comboIncrement, 1)
         XCTAssertEqual(result.phases[0].removedPositions, positions)
+        XCTAssertEqual(removals.count, 1)
+        XCTAssertEqual(removals[0].removedPositions, positions)
+    }
+
+    func testThreeDisconnectedWaterGroupsUseThreeSequentialRemovalSteps() {
+        let matches = [0, 2, 4].map { row in
+            MatchResult(
+                type: .water,
+                positions: Set((0..<3).map { GridPosition(row: row, column: $0) })
+            )
+        }
+
+        let result = ResolveResult(matches: matches)
+        let removals = removalPhases(in: result)
+
+        XCTAssertEqual(result.comboCount, 3)
+        XCTAssertEqual(removals.count, 3)
+        XCTAssertEqual(removals.map(\.type), [.water, .water, .water])
+        XCTAssertEqual(removals.map(\.comboIncrement), [1, 1, 1])
     }
 
     func testResolvePipelineRunsGravityAndRefillExactlyOnceAfterAllPhases() {
         let result = ResolveResult(matches: [
             makeMatch(type: .heart, group: 0),
             makeMatch(type: .fire, group: 1),
-            makeMatch(type: .water, group: 2)
+            makeMatch(type: .water, group: 2),
+            makeMatch(type: .water, group: 3)
         ])
         let gravityCount = result.steps.filter {
             if case .gravity(expectedRemovedOrbCount: _) = $0 { return true }
@@ -640,11 +758,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
         XCTAssertEqual(gravityCount, 1)
         XCTAssertEqual(refillCount, 1)
-        XCTAssertEqual(result.steps.count, result.phases.count + 2)
-        if case .gravity(expectedRemovedOrbCount: _) = result.steps[result.phases.count] {
-            // Expected: all remove phases finish before the single gravity step.
+        XCTAssertEqual(result.steps.count, result.matches.count + 2)
+        if case .gravity(expectedRemovedOrbCount: _) = result.steps[result.matches.count] {
+            // Expected: all group removals finish before the single gravity step.
         } else {
-            XCTFail("Gravity must follow every ordered remove phase")
+            XCTFail("Gravity must follow every ordered group removal")
         }
         if let lastStep = result.steps.last,
            case .refill(expectedRefillCount: _) = lastStep {
@@ -878,6 +996,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let refillTypes = slots.enumerated().map { OrbType.allCases[$0.offset % OrbType.allCases.count] }
         XCTAssertEqual(grid.refill(types: refillTypes, at: slots).count, expectedRemoved, file: file, line: line)
         XCTAssertEqual(allOrbIDs(in: grid).count, 30, file: file, line: line)
+    }
+
+    private func removalPhases(in result: ResolveResult) -> [ResolvePhase] {
+        result.steps.compactMap { step in
+            guard case let .remove(phase) = step else { return nil }
+            return phase
+        }
     }
 
     private func assertPersistentSkyfallCycles(

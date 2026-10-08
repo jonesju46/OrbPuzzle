@@ -3,7 +3,10 @@ import Foundation
 /// Plans only the types for real empty refill slots. Existing Orb models are never
 /// replaced, so every skyfall cycle preserves all non-removed IDs and types.
 final class SkyfallController {
-    private(set) var requestedCombos = GameSettings.defaultSkyfallComboCount
+    private(set) var requestedCombos = GameSettings.effectiveSkyfallComboCount(
+        enabled: GameSettings.defaultSkyfallComboEnabled,
+        configured: GameSettings.defaultSkyfallComboCount
+    )
     private(set) var generatedCombos = 0
 
     var remainingCombos: Int { max(0, requestedCombos - generatedCombos) }
@@ -11,7 +14,7 @@ final class SkyfallController {
     var isComplete: Bool { generatedCombos == requestedCombos }
 
     func reset(requestedCombos: Int) {
-        self.requestedCombos = min(max(requestedCombos, 1), 99)
+        self.requestedCombos = min(max(requestedCombos, 0), 99)
         generatedCombos = 0
     }
 

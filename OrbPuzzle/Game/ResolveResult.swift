@@ -32,7 +32,11 @@ struct ResolveResult: Equatable, Sendable {
     let removedOrbCount: Int
 
     var steps: [ResolveStep] {
-        phases.map(ResolveStep.remove) + [
+        phases.flatMap { phase in
+            phase.matches.map { match in
+                ResolveStep.remove(ResolvePhase(type: phase.type, matches: [match]))
+            }
+        } + [
             .gravity(expectedRemovedOrbCount: removedOrbCount),
             .refill(expectedRefillCount: removedOrbCount)
         ]

@@ -8,7 +8,10 @@ final class GameScene: SKScene {
     private let refillController = RefillController()
     private let comboController = ComboController()
     private let skyfallController = SkyfallController()
-    private lazy var turnController = TurnController(duration: GameSettings.defaultTurnDuration)
+    private lazy var turnController = TurnController(duration: GameSettings.effectiveTurnDuration(
+        enabled: GameSettings.defaultTurnTimeEnabled,
+        configured: GameSettings.defaultTurnDuration
+    ))
 
     private let boardNode = SKNode()
     private let boardBackground = SKShapeNode()
@@ -29,7 +32,10 @@ final class GameScene: SKScene {
         }
     }
     private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
-    private var requestedSkyfallCombos = GameSettings.defaultSkyfallComboCount
+    private var requestedSkyfallCombos = GameSettings.effectiveSkyfallComboCount(
+        enabled: GameSettings.defaultSkyfallComboEnabled,
+        configured: GameSettings.defaultSkyfallComboCount
+    )
     private var lastUpdateTime: TimeInterval = 0
     private var forcedEndInProgress = false
     private var gameSessionFence = GameSessionFence()
@@ -52,7 +58,7 @@ final class GameScene: SKScene {
     func configure(turnDuration: Double, noResolveDuringTurn: Bool, skyfallComboCount: Int) {
         turnController.duration = turnDuration
         self.noResolveDuringTurn = noResolveDuringTurn
-        requestedSkyfallCombos = min(max(skyfallComboCount, 1), 99)
+        requestedSkyfallCombos = min(max(skyfallComboCount, 0), 99)
         updateDebugOverlay()
     }
 
@@ -385,7 +391,7 @@ final class GameScene: SKScene {
                 print("[RESOLVE-BUG] phase=\(phase.type.rawValue) expected=\(phase.removedOrbCount) removed=\(removed.count)")
             }
 #endif
-            animateRemovalBatch(removed) { [weak self] in
+            animateRemovalGroup(removed) { [weak self] in
                 guard let self else { return }
                 guard resolveID == self.activeResolveID,
                       self.resolveLifecycle.acceptsSkyfallCompletion,
@@ -397,7 +403,7 @@ final class GameScene: SKScene {
                     self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
                 }
 #if DEBUG
-                print("[RESOLVE] phase=\(phase.type.rawValue) groups=\(phase.groupCount)")
+                print("[RESOLVE] group=\(phase.type.rawValue) orbs=\(phase.removedOrbCount)")
 #endif
                 self.run(after: GameSettings.Tuning.resolvePhaseDelay) { [weak self] in
                     self?.execute(
@@ -446,9 +452,9 @@ final class GameScene: SKScene {
         }
     }
 
-    /// Starts every node in one attribute phase on the same frame and advances
-    /// only after the entire same-color batch has completed its animation.
-    private func animateRemovalBatch(_ removed: [Orb], completion: @escaping () -> Void) {
+    /// A normalized connected match is one combo. Its orbs animate together,
+    /// then the pipeline advances to the next group in attribute order.
+    private func animateRemovalGroup(_ removed: [Orb], completion: @escaping () -> Void) {
         let nodes = removed.compactMap { orbNodes[$0.id] }
         guard !nodes.isEmpty else {
             completion()
