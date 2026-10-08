@@ -43,12 +43,16 @@ struct GameSessionSnapshot: Equatable {
     let completedTurnCount: Int
     let averageTurnTime: TimeInterval
     let averageTotalCombo: Double
+    let averageManualCombo: Double
+    let averageSkyfallCombo: Double
 }
 
 struct SessionStatistics: Equatable, Sendable {
     private(set) var completedTurnCount = 0
     private(set) var turnTimeSum: TimeInterval = 0
     private(set) var totalComboSum = 0
+    private(set) var manualComboSum = 0
+    private(set) var skyfallComboSum = 0
     private(set) var comboTotalSumByType = SessionStatistics.zeroedCounts()
     private var lastCommittedResolveID: UInt?
 
@@ -62,6 +66,16 @@ struct SessionStatistics: Equatable, Sendable {
         return Double(totalComboSum) / Double(completedTurnCount)
     }
 
+    var averageManualCombo: Double {
+        guard completedTurnCount > 0 else { return 0 }
+        return Double(manualComboSum) / Double(completedTurnCount)
+    }
+
+    var averageSkyfallCombo: Double {
+        guard completedTurnCount > 0 else { return 0 }
+        return Double(skyfallComboSum) / Double(completedTurnCount)
+    }
+
     func averageCombo(for type: OrbType) -> Double {
         guard completedTurnCount > 0 else { return 0 }
         return Double(comboTotalSumByType[type, default: 0]) / Double(completedTurnCount)
@@ -71,6 +85,8 @@ struct SessionStatistics: Equatable, Sendable {
         completedTurnCount = 0
         turnTimeSum = 0
         totalComboSum = 0
+        manualComboSum = 0
+        skyfallComboSum = 0
         comboTotalSumByType = SessionStatistics.zeroedCounts()
         lastCommittedResolveID = nil
     }
@@ -79,14 +95,19 @@ struct SessionStatistics: Equatable, Sendable {
     mutating func commitCompletedTurn(
         resolveID: UInt,
         moveTime: TimeInterval,
-        totalCombo: Int,
+        manualCombo: Int,
+        skyfallCombo: Int,
         comboTotalByType: [OrbType: Int]
     ) -> Bool {
         guard lastCommittedResolveID != resolveID else { return false }
+        let safeManualCombo = max(0, manualCombo)
+        let safeSkyfallCombo = max(0, skyfallCombo)
         lastCommittedResolveID = resolveID
         completedTurnCount += 1
         turnTimeSum += max(0, moveTime)
-        totalComboSum += max(0, totalCombo)
+        manualComboSum += safeManualCombo
+        skyfallComboSum += safeSkyfallCombo
+        totalComboSum += safeManualCombo + safeSkyfallCombo
         for type in OrbType.allCases {
             comboTotalSumByType[type, default: 0] += max(0, comboTotalByType[type, default: 0])
         }
@@ -103,8 +124,16 @@ enum GameplayStatusHUDText {
         String(format: "Time %.1f [%.1f]", current, average)
     }
 
-    static func combo(currentBreakdown: String, average: Double) -> String {
-        String(format: "%@ [%.1f]", currentBreakdown, average)
+    static func game(completedTurnCount: Int) -> String {
+        "Game \(completedTurnCount)"
+    }
+
+    static func combo(
+        currentBreakdown: String,
+        averageManual: Double,
+        averageSkyfall: Double
+    ) -> String {
+        String(format: "%@ [%.1f + %.1f]", currentBreakdown, averageManual, averageSkyfall)
     }
 
     static func orbType(currentBreakdown: String, average: Double) -> String {

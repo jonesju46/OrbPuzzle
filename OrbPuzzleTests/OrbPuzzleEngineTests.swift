@@ -414,17 +414,18 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     func testSessionStatisticsAveragesCompletedTurnsAndFormatsHUD() {
         var statistics = SessionStatistics()
-        let turns: [(time: TimeInterval, combo: Int, water: Int)] = [
-            (8.0, 8, 2),
-            (10.0, 7, 0),
-            (10.5, 8, 1)
+        let turns: [(time: TimeInterval, manual: Int, skyfall: Int, water: Int)] = [
+            (8.0, 6, 2, 2),
+            (10.0, 5, 2, 0),
+            (10.5, 7, 1, 1)
         ]
 
         for (index, turn) in turns.enumerated() {
             XCTAssertTrue(statistics.commitCompletedTurn(
                 resolveID: UInt(index + 1),
                 moveTime: turn.time,
-                totalCombo: turn.combo,
+                manualCombo: turn.manual,
+                skyfallCombo: turn.skyfall,
                 comboTotalByType: [.water: turn.water]
             ))
         }
@@ -432,7 +433,10 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(statistics.completedTurnCount, 3)
         XCTAssertEqual(statistics.averageTurnTime, 9.5, accuracy: 0.000_1)
         XCTAssertEqual(statistics.averageTotalCombo, 7.666_666, accuracy: 0.000_1)
+        XCTAssertEqual(statistics.averageManualCombo, 6.0, accuracy: 0.000_1)
+        XCTAssertEqual(statistics.averageSkyfallCombo, 1.666_666, accuracy: 0.000_1)
         XCTAssertEqual(statistics.averageCombo(for: .water), 1.0, accuracy: 0.000_1)
+        XCTAssertEqual(GameplayStatusHUDText.game(completedTurnCount: 3), "Game 3")
         XCTAssertEqual(
             GameplayStatusHUDText.time(current: 10.5, average: statistics.averageTurnTime),
             "Time 10.5 [9.5]"
@@ -440,9 +444,18 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(
             GameplayStatusHUDText.combo(
                 currentBreakdown: "COMBO 8 (6 + 2)",
-                average: statistics.averageTotalCombo
+                averageManual: statistics.averageManualCombo,
+                averageSkyfall: statistics.averageSkyfallCombo
             ),
-            "COMBO 8 (6 + 2) [7.7]"
+            "COMBO 8 (6 + 2) [6.0 + 1.7]"
+        )
+        XCTAssertEqual(
+            GameplayStatusHUDText.combo(
+                currentBreakdown: "COMBO 20 (5 + 15)",
+                averageManual: 5.8,
+                averageSkyfall: 16.8
+            ),
+            "COMBO 20 (5 + 15) [5.8 + 16.8]"
         )
         XCTAssertEqual(
             GameplayStatusHUDText.orbType(
@@ -459,19 +472,23 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(statistics.commitCompletedTurn(
             resolveID: 7,
             moveTime: 4.0,
-            totalCombo: 14,
+            manualCombo: 7,
+            skyfallCombo: 7,
             comboTotalByType: [.water: 3]
         ))
         XCTAssertFalse(statistics.commitCompletedTurn(
             resolveID: 7,
             moveTime: 4.0,
-            totalCombo: 14,
+            manualCombo: 7,
+            skyfallCombo: 7,
             comboTotalByType: [.water: 3]
         ))
 
         XCTAssertEqual(statistics.completedTurnCount, 1)
         XCTAssertEqual(statistics.averageTurnTime, 4.0)
         XCTAssertEqual(statistics.averageTotalCombo, 14.0)
+        XCTAssertEqual(statistics.averageManualCombo, 7.0)
+        XCTAssertEqual(statistics.averageSkyfallCombo, 7.0)
         XCTAssertEqual(statistics.averageCombo(for: .water), 3.0)
     }
 
@@ -481,16 +498,28 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(statistics.completedTurnCount, 0)
         XCTAssertEqual(statistics.averageTurnTime, 0)
         XCTAssertEqual(statistics.averageTotalCombo, 0)
+        XCTAssertEqual(statistics.averageManualCombo, 0)
+        XCTAssertEqual(statistics.averageSkyfallCombo, 0)
         XCTAssertEqual(statistics.averageCombo(for: .water), 0)
         XCTAssertEqual(
             GameplayStatusHUDText.time(current: 0, average: statistics.averageTurnTime),
             "Time 0.0 [0.0]"
         )
+        XCTAssertEqual(GameplayStatusHUDText.game(completedTurnCount: 0), "Game 0")
+        XCTAssertEqual(
+            GameplayStatusHUDText.combo(
+                currentBreakdown: "COMBO 0 (0 + 0)",
+                averageManual: statistics.averageManualCombo,
+                averageSkyfall: statistics.averageSkyfallCombo
+            ),
+            "COMBO 0 (0 + 0) [0.0 + 0.0]"
+        )
 
         XCTAssertTrue(statistics.commitCompletedTurn(
             resolveID: 1,
             moveTime: 8,
-            totalCombo: 6,
+            manualCombo: 4,
+            skyfallCombo: 2,
             comboTotalByType: [.fire: 2]
         ))
         statistics.reset()
@@ -498,9 +527,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(statistics.completedTurnCount, 0)
         XCTAssertEqual(statistics.turnTimeSum, 0)
         XCTAssertEqual(statistics.totalComboSum, 0)
+        XCTAssertEqual(statistics.manualComboSum, 0)
+        XCTAssertEqual(statistics.skyfallComboSum, 0)
         XCTAssertTrue(statistics.comboTotalSumByType.values.allSatisfy { $0 == 0 })
         XCTAssertEqual(statistics.averageTurnTime, 0)
         XCTAssertEqual(statistics.averageTotalCombo, 0)
+        XCTAssertEqual(statistics.averageManualCombo, 0)
+        XCTAssertEqual(statistics.averageSkyfallCombo, 0)
         XCTAssertEqual(statistics.averageCombo(for: .fire), 0)
     }
 
@@ -514,7 +547,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
             statistics.commitCompletedTurn(
                 resolveID: 1,
                 moveTime: moveTime,
-                totalCombo: 0,
+                manualCombo: 0,
+                skyfallCombo: 0,
                 comboTotalByType: [:]
             )
         }
@@ -536,6 +570,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(scene.sessionSnapshot.completedTurnCount, 0)
         XCTAssertEqual(scene.sessionSnapshot.averageTurnTime, 0)
         XCTAssertEqual(scene.sessionSnapshot.averageTotalCombo, 0)
+        XCTAssertEqual(scene.sessionSnapshot.averageManualCombo, 0)
+        XCTAssertEqual(scene.sessionSnapshot.averageSkyfallCombo, 0)
     }
 
     func testOldCallbackIsRejectedAfterNewSessionBegins() {

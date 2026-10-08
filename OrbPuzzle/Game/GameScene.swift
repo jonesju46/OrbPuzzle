@@ -78,7 +78,9 @@ final class GameScene: SKScene {
             resolveLifecycleState: resolveLifecycle.state,
             completedTurnCount: sessionStatistics.completedTurnCount,
             averageTurnTime: sessionStatistics.averageTurnTime,
-            averageTotalCombo: sessionStatistics.averageTotalCombo
+            averageTotalCombo: sessionStatistics.averageTotalCombo,
+            averageManualCombo: sessionStatistics.averageManualCombo,
+            averageSkyfallCombo: sessionStatistics.averageSkyfallCombo
         )
     }
 
@@ -167,7 +169,7 @@ final class GameScene: SKScene {
         addChild(timerFill)
 
 #if DEBUG
-        for _ in 0..<5 {
+        for _ in 0..<6 {
             let label = SKLabelNode(fontNamed: "Menlo")
             label.fontSize = 10
             label.fontColor = .white.withAlphaComponent(0.72)
@@ -212,7 +214,9 @@ final class GameScene: SKScene {
         for (index, label) in debugLabels.enumerated() {
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - 18 - CGFloat(index) * 12)
         }
-        let rightColumnX = horizontalMargin + boardWidth * 0.52
+        // Leave enough room for the split manual/skyfall averages in the
+        // left COMBO line while keeping the six shorter type rows visible.
+        let rightColumnX = horizontalMargin + boardWidth * 0.55
         for (index, label) in orbTypeDebugLabels.enumerated() {
             label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - 18 - CGFloat(index) * 12)
         }
@@ -726,7 +730,8 @@ final class GameScene: SKScene {
             sessionStatistics.commitCompletedTurn(
                 resolveID: resolveID,
                 moveTime: finalTurnMoveTime,
-                totalCombo: comboController.comboCount,
+                manualCombo: comboController.manualComboCount,
+                skyfallCombo: comboController.skyfallComboCount,
                 comboTotalByType: comboController.comboTotalByType
             )
         }
@@ -835,19 +840,23 @@ final class GameScene: SKScene {
 
     private func updateDebugOverlay() {
 #if DEBUG
-        guard debugLabels.count == 5,
+        guard debugLabels.count == 6,
               orbTypeDebugLabels.count == OrbType.resolveOrder.count else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
-        debugLabels[2].text = GameplayStatusHUDText.time(
+        debugLabels[2].text = GameplayStatusHUDText.game(
+            completedTurnCount: sessionStatistics.completedTurnCount
+        )
+        debugLabels[3].text = GameplayStatusHUDText.time(
             current: turnController.displayedElapsedTurnTime,
             average: sessionStatistics.averageTurnTime
         )
-        debugLabels[3].text = GameplayStatusHUDText.combo(
+        debugLabels[4].text = GameplayStatusHUDText.combo(
             currentBreakdown: comboController.breakdownText,
-            average: sessionStatistics.averageTotalCombo
+            averageManual: sessionStatistics.averageManualCombo,
+            averageSkyfall: sessionStatistics.averageSkyfallCombo
         )
-        debugLabels[4].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
+        debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
         for (index, type) in OrbType.resolveOrder.enumerated() {
             orbTypeDebugLabels[index].text = GameplayStatusHUDText.orbType(
                 currentBreakdown: comboController.breakdownText(for: type),
