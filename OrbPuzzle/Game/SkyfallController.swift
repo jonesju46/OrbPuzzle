@@ -8,21 +8,26 @@ final class SkyfallController {
         configured: GameSettings.defaultSkyfallComboCount
     )
     private(set) var generatedCombos = 0
+    private(set) var controlledGeneratedCombos = 0
 
     var hasControlledTarget: Bool { requestedCombos > 0 }
-    var remainingCombos: Int { max(0, requestedCombos - generatedCombos) }
-    var needsAnotherCycle: Bool { generatedCombos < requestedCombos }
-    var isComplete: Bool { generatedCombos >= requestedCombos }
+    var remainingCombos: Int { max(0, requestedCombos - controlledGeneratedCombos) }
+    var needsAnotherCycle: Bool { controlledGeneratedCombos < requestedCombos }
+    var isComplete: Bool { controlledGeneratedCombos >= requestedCombos }
 
     func reset(requestedCombos: Int) {
         self.requestedCombos = min(max(requestedCombos, 0), 99)
         generatedCombos = 0
+        controlledGeneratedCombos = 0
     }
 
     @discardableResult
-    func recordDetectedGroups(_ matchGroupCount: Int) -> Bool {
+    func recordDetectedGroups(_ matchGroupCount: Int, controlled: Bool = true) -> Bool {
         guard matchGroupCount > 0 else { return false }
         generatedCombos += matchGroupCount
+        if controlled, hasControlledTarget {
+            controlledGeneratedCombos += matchGroupCount
+        }
         return true
     }
 

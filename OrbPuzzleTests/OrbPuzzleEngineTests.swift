@@ -99,10 +99,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
         controller.reset(requestedCombos: 19)
         XCTAssertTrue(controller.recordDetectedGroups(7))
         XCTAssertEqual(controller.generatedCombos, 7)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 7)
 
         controller.reset(requestedCombos: 19)
 
         XCTAssertEqual(controller.generatedCombos, 0)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
         XCTAssertEqual(controller.requestedCombos, 19)
     }
 
@@ -223,8 +225,14 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(naturalMatches.count, 1)
         XCTAssertEqual(naturalMatches[0].type, .light)
         XCTAssertFalse(StableBoardScan(matches: naturalMatches).canFinishResolve)
-        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
+        XCTAssertTrue(controller.recordDetectedGroups(
+            naturalMatches.count,
+            controlled: false
+        ))
         XCTAssertEqual(controller.generatedCombos, 1)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
+        XCTAssertEqual(controller.remainingCombos, 0)
+        XCTAssertFalse(controller.needsAnotherCycle)
     }
 
     func testSkyfallOffNaturalRefillWithNoMatchCanFinish() {
@@ -1138,8 +1146,14 @@ final class OrbPuzzleEngineTests: XCTestCase {
             refillSlots: slots,
             using: &generator
         ))
-        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
+        XCTAssertTrue(controller.recordDetectedGroups(
+            naturalMatches.count,
+            controlled: false
+        ))
         XCTAssertEqual(controller.generatedCombos, 1)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
+        XCTAssertEqual(controller.remainingCombos, 10)
+        XCTAssertTrue(controller.needsAnotherCycle)
     }
 
     func testSkyfallOneFinalizesOnceWithoutStartingAnotherCycle() {
@@ -1208,15 +1222,41 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(grid.emptyPositions().count, 0)
     }
 
-    func testNaturalMatchesCanOvershootControlledMinimumGoal() {
+    func testNaturalMatchesDoNotReduceControlledTarget() {
         let controller = SkyfallController()
-        controller.reset(requestedCombos: 10)
-        XCTAssertFalse(controller.recordDetectedGroups(0))
-        XCTAssertTrue(controller.recordDetectedGroups(9))
-        XCTAssertTrue(controller.recordDetectedGroups(2))
-        XCTAssertEqual(controller.generatedCombos, 11)
+        controller.reset(requestedCombos: 3)
+
+        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
+        XCTAssertEqual(controller.generatedCombos, 2)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
+        XCTAssertEqual(controller.remainingCombos, 3)
+        XCTAssertTrue(controller.needsAnotherCycle)
+
+        XCTAssertTrue(controller.recordDetectedGroups(1, controlled: true))
+        XCTAssertEqual(controller.controlledGeneratedCombos, 1)
+        XCTAssertEqual(controller.remainingCombos, 2)
+        XCTAssertTrue(controller.needsAnotherCycle)
+
+        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: true))
+        XCTAssertEqual(controller.generatedCombos, 5)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 3)
         XCTAssertEqual(controller.remainingCombos, 0)
         XCTAssertFalse(controller.needsAnotherCycle)
+        XCTAssertTrue(controller.isComplete)
+    }
+
+    func testCompletedControlledTargetAllowsNaturalSkyfallBeyondTarget() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 3)
+
+        XCTAssertTrue(controller.recordDetectedGroups(3, controlled: true))
+        XCTAssertTrue(controller.isComplete)
+        XCTAssertFalse(controller.needsAnotherCycle)
+
+        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
+        XCTAssertEqual(controller.controlledGeneratedCombos, 3)
+        XCTAssertEqual(controller.generatedCombos, 5)
+        XCTAssertEqual(controller.remainingCombos, 0)
         XCTAssertTrue(controller.isComplete)
     }
 
@@ -1233,8 +1273,9 @@ final class OrbPuzzleEngineTests: XCTestCase {
             refillSlots: slots,
             using: &generator
         ))
-        XCTAssertTrue(controller.recordDetectedGroups(2))
+        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
         XCTAssertEqual(controller.generatedCombos, 2)
+        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
     }
 
     func testEffectiveSkyfallZeroCannotFinishWhileNaturalMatchesRemain() {

@@ -517,7 +517,7 @@ final class GameScene: SKScene {
 
 #if DEBUG
         if isControlledSkyfallRefill {
-            print("[SKYFALL] controlled batch begin progress=\(skyfallController.generatedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
+            print("[SKYFALL] controlled batch begin progress=\(skyfallController.controlledGeneratedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
         } else if isNaturalChainRefill {
             print("[MATCH] safe chain refill before stable-board scan")
         } else {
@@ -525,14 +525,14 @@ final class GameScene: SKScene {
         }
 #endif
         let plannedTypes: [OrbType]?
-        if skyfallController.hasControlledTarget {
-            // Keep the existing ON behavior: controlled planning while pending,
-            // then safe refills once the configured minimum has been reached.
+        if skyfallController.hasControlledTarget, !isFinalRefill {
+            // While the controlled quota is pending, preserve the existing
+            // controlled-plan-or-safe-fallback behavior.
             plannedTypes = controlledTypes
                 ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         } else {
-            // OFF means no guaranteed groups. It must use an ordinary random
-            // refill so naturally formed groups remain possible and detectable.
+            // OFF and completed ON targets both use ordinary random refill so
+            // naturally formed groups remain possible and detectable.
             plannedTypes = skyfallController.makeNaturalRefill(
                 grid: grid,
                 refillSlots: refillSlots
@@ -546,9 +546,9 @@ final class GameScene: SKScene {
             return
         }
 #if DEBUG
-        let refillMode = !skyfallController.hasControlledTarget
-            ? "natural"
-            : (isControlledSkyfallRefill ? "controlled" : "safe")
+        let refillMode = isControlledSkyfallRefill
+            ? "controlled"
+            : ((skyfallController.hasControlledTarget && !isFinalRefill) ? "safe" : "natural")
         let typeSummary = OrbType.allCases.map { type in
             "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
         }.joined(separator: " ")
@@ -596,10 +596,13 @@ final class GameScene: SKScene {
             // Initial/manual matches are processed before the first refill and
             // never enter this counter. Every post-refill full-board detection,
             // controlled or natural, contributes its actual normalized groups.
-            if self.skyfallController.recordDetectedGroups(matches.count) {
+            if self.skyfallController.recordDetectedGroups(
+                matches.count,
+                controlled: isControlledSkyfallRefill
+            ) {
 #if DEBUG
                 let source = isControlledSkyfallRefill ? "controlled" : "natural"
-                print("[SKYFALL] \(source) groups=\(matches.count) progress=\(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos)")
+                print("[SKYFALL] \(source) groups=\(matches.count) controlled=\(self.skyfallController.controlledGeneratedCombos)/\(self.skyfallController.requestedCombos) total=\(self.skyfallController.generatedCombos)")
 #endif
             }
 #if DEBUG
