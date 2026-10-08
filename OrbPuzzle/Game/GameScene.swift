@@ -403,13 +403,14 @@ final class GameScene: SKScene {
         switch steps[index] {
         case let .remove(phase):
             gameState = .removing
-            comboController.add(
+            let comboNumber = comboController.add(
                 type: phase.type,
                 groups: phase.comboIncrement,
                 source: source
             )
             comboController.animate(label: comboLabel)
             updateDebugOverlay()
+            GameAudioManager.shared.playComboSound(comboNumber: comboNumber)
             let removed = grid.remove(phase.removedPositions)
 #if DEBUG
             if removed.count != phase.removedOrbCount {

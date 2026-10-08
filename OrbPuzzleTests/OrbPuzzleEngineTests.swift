@@ -3,6 +3,100 @@ import XCTest
 @testable import OrbPuzzle
 
 final class OrbPuzzleEngineTests: XCTestCase {
+    func testComboSoundIndexLoopsEverySevenCombos() {
+        let expected: [Int: Int] = [
+            1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
+            8: 1, 9: 2, 10: 3, 14: 7, 15: 1, 99: 1
+        ]
+
+        for (comboNumber, soundIndex) in expected {
+            XCTAssertEqual(
+                ComboSoundSequence.soundIndex(for: comboNumber),
+                Optional(soundIndex)
+            )
+        }
+        XCTAssertNil(ComboSoundSequence.soundIndex(for: 0))
+        XCTAssertNil(ComboSoundSequence.soundIndex(for: -1))
+    }
+
+    func testManualAndSkyfallUseOneTotalComboSoundSequence() {
+        let controller = ComboController()
+        var soundIndices: [Int] = []
+
+        for _ in 0..<5 {
+            let comboNumber = controller.add(type: .water, groups: 1, source: .manual)
+            soundIndices.append(ComboSoundSequence.soundIndex(for: comboNumber) ?? 0)
+        }
+        for _ in 0..<3 {
+            let comboNumber = controller.add(type: .fire, groups: 1, source: .skyfall)
+            soundIndices.append(ComboSoundSequence.soundIndex(for: comboNumber) ?? 0)
+        }
+
+        XCTAssertEqual(soundIndices, [1, 2, 3, 4, 5, 6, 7, 1])
+        XCTAssertEqual(controller.comboCount, 8)
+    }
+
+    func testDisconnectedSameColorGroupsReceiveSeparateComboSounds() {
+        let controller = ComboController()
+        _ = controller.add(type: .fire, groups: 1, source: .manual)
+        _ = controller.add(type: .wood, groups: 1, source: .manual)
+        let waterGroups = [
+            makeMatch(type: .water, group: 0),
+            makeMatch(type: .water, group: 2)
+        ]
+
+        let soundIndices = waterGroups.map { match -> Int in
+            let comboNumber = controller.add(type: match.type, groups: 1, source: .manual)
+            return ComboSoundSequence.soundIndex(for: comboNumber) ?? 0
+        }
+
+        XCTAssertEqual(soundIndices, [3, 4])
+        XCTAssertEqual(controller.manualComboByType[.water], 2)
+    }
+
+    func testNormalizedTShapeReceivesOneComboSound() {
+        let tShape = Set(
+            (0...2).map { GridPosition(row: 1, column: $0) }
+                + (0...2).map { GridPosition(row: $0, column: 1) }
+        )
+        let matches = MatchDetector().detect(in: gridWith(type: .water, at: tShape))
+        let controller = ComboController()
+        let soundIndices = matches.map { match -> Int in
+            let comboNumber = controller.add(type: match.type, groups: 1, source: .manual)
+            return ComboSoundSequence.soundIndex(for: comboNumber) ?? 0
+        }
+
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(soundIndices, [1])
+    }
+
+    func testMissingComboSoundAssetFailsSafely() {
+        var requestedResource: (name: String, fileExtension: String)?
+        let audioManager = GameAudioManager { name, fileExtension in
+            requestedResource = (name, fileExtension)
+            return nil
+        }
+
+        XCTAssertFalse(audioManager.playComboSound(comboNumber: 5))
+        XCTAssertEqual(requestedResource?.name, "combo_5")
+        XCTAssertEqual(requestedResource?.fileExtension, "wav")
+    }
+
+    func testNewTurnRestartsComboSoundAtOne() {
+        let controller = ComboController()
+        var lastSoundIndex = 0
+
+        for _ in 0..<12 {
+            let comboNumber = controller.add(type: .heart, groups: 1, source: .skyfall)
+            lastSoundIndex = ComboSoundSequence.soundIndex(for: comboNumber) ?? 0
+        }
+        XCTAssertEqual(lastSoundIndex, 5)
+
+        controller.reset()
+        let firstCombo = controller.add(type: .heart, groups: 1, source: .manual)
+        XCTAssertEqual(ComboSoundSequence.soundIndex(for: firstCombo), Optional(1))
+    }
+
     func testNewGameCreatesThirtyNewOrbIDsAndResetsTransientState() {
         let scene = GameScene(size: CGSize(width: 390, height: 844))
         scene.configure(turnDuration: 10, noResolveDuringTurn: false, skyfallComboCount: 19)
