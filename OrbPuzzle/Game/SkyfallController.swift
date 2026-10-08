@@ -9,6 +9,7 @@ final class SkyfallController {
     )
     private(set) var generatedCombos = 0
 
+    var hasControlledTarget: Bool { requestedCombos > 0 }
     var remainingCombos: Int { max(0, requestedCombos - generatedCombos) }
     var needsAnotherCycle: Bool { generatedCombos < requestedCombos }
     var isComplete: Bool { generatedCombos >= requestedCombos }
@@ -20,7 +21,7 @@ final class SkyfallController {
 
     @discardableResult
     func recordDetectedGroups(_ matchGroupCount: Int) -> Bool {
-        guard requestedCombos > 0, matchGroupCount > 0 else { return false }
+        guard matchGroupCount > 0 else { return false }
         generatedCombos += matchGroupCount
         return true
     }
@@ -33,6 +34,23 @@ final class SkyfallController {
     func makeSafeRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
         var generator = SystemRandomNumberGenerator()
         return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
+    }
+
+    /// Skyfall OFF disables guarantees, not chance. These types are deliberately
+    /// unfiltered so a normal refill may form zero or more natural match groups.
+    func makeNaturalRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
+        return makeNaturalRefill(grid: grid, refillSlots: refillSlots) {
+            OrbType.allCases.randomElement() ?? .fire
+        }
+    }
+
+    func makeNaturalRefill(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        typeProvider: () -> OrbType
+    ) -> [OrbType]? {
+        guard refillSlots == grid.emptyPositions() else { return nil }
+        return refillSlots.map { _ in typeProvider() }
     }
 
     func makeControlledRefill<R: RandomNumberGenerator>(

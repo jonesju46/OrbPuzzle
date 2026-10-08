@@ -515,8 +515,20 @@ final class GameScene: SKScene {
             print("[REFILL] final begin slots=\(refillSlots.count)")
         }
 #endif
-        let plannedTypes = controlledTypes
-            ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        let plannedTypes: [OrbType]?
+        if skyfallController.hasControlledTarget {
+            // Keep the existing ON behavior: controlled planning while pending,
+            // then safe refills once the configured minimum has been reached.
+            plannedTypes = controlledTypes
+                ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        } else {
+            // OFF means no guaranteed groups. It must use an ordinary random
+            // refill so naturally formed groups remain possible and detectable.
+            plannedTypes = skyfallController.makeNaturalRefill(
+                grid: grid,
+                refillSlots: refillSlots
+            )
+        }
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
 #if DEBUG
             print("[REFILL-BUG] unable to plan slot-only refill slots=\(refillSlots.count)")
@@ -727,7 +739,11 @@ final class GameScene: SKScene {
         debugLabels[1].text = "State \(gameState.rawValue)"
         debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
         debugLabels[3].text = "Combo \(comboController.comboCount)"
-        debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
+        if skyfallController.hasControlledTarget {
+            debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
+        } else {
+            debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)"
+        }
         debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
 #endif
     }

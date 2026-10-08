@@ -133,7 +133,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(storedSkyfallCombo, 19)
     }
 
-    func testSkyfallOffDisablesControlledCyclesButNaturalMatchStillRequiresResolve() {
+    func testSkyfallOffNaturalMatchStillRequiresResolve() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 0)
         var types = matchTestBoardTypes()
@@ -164,6 +164,93 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(naturalMatches.count, 1)
         XCTAssertEqual(naturalMatches[0].type, .light)
         XCTAssertFalse(StableBoardScan(matches: naturalMatches).canFinishResolve)
+        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
+        XCTAssertEqual(controller.generatedCombos, 1)
+    }
+
+    func testSkyfallOffNaturalRefillWithNoMatchCanFinish() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        let grid = OrbGrid()
+        let slots = grid.emptyPositions()
+        let stableTypes = matchTestBoardTypes()
+        var typeIndex = 0
+        guard let refillTypes = controller.makeNaturalRefill(
+            grid: grid,
+            refillSlots: slots,
+            typeProvider: {
+                let position = slots[typeIndex]
+                typeIndex += 1
+                return stableTypes[position.row][position.column]
+            }
+        ) else {
+            XCTFail("Expected an unfiltered natural refill")
+            return
+        }
+        _ = grid.refill(types: refillTypes, at: slots)
+        let stableBoard = StableBoardScan(matches: MatchDetector().detect(in: grid))
+
+        XCTAssertFalse(controller.hasControlledTarget)
+        XCTAssertFalse(controller.needsAnotherCycle)
+        XCTAssertTrue(stableBoard.canFinishResolve)
+        XCTAssertEqual(controller.generatedCombos, 0)
+    }
+
+    func testSkyfallOffNaturalRefillResolvesTwoDetectedGroups() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        let grid = OrbGrid()
+        let slots = grid.emptyPositions()
+        var naturalTypes = matchTestBoardTypes()
+        for column in 0...2 { naturalTypes[0][column] = .water }
+        for column in 3...5 { naturalTypes[4][column] = .fire }
+        var typeIndex = 0
+        guard let refillTypes = controller.makeNaturalRefill(
+            grid: grid,
+            refillSlots: slots,
+            typeProvider: {
+                let position = slots[typeIndex]
+                typeIndex += 1
+                return naturalTypes[position.row][position.column]
+            }
+        ) else {
+            XCTFail("Expected an unfiltered natural refill")
+            return
+        }
+        _ = grid.refill(types: refillTypes, at: slots)
+        let naturalMatches = MatchDetector().detect(in: grid)
+        let result = ResolveResult(matches: naturalMatches)
+
+        XCTAssertEqual(naturalMatches.count, 2)
+        XCTAssertFalse(StableBoardScan(matches: naturalMatches).canFinishResolve)
+        XCTAssertEqual(result.comboCount, 2)
+        XCTAssertEqual(result.phases.map(\.type), [.water, .fire])
+        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
+        XCTAssertEqual(controller.generatedCombos, 2)
+    }
+
+    func testSkyfallOffNaturalChainAccumulatesUntilStable() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        let snapshots = [
+            [makeMatch(type: .water, group: 0), makeMatch(type: .fire, group: 1)],
+            [makeMatch(type: .wood, group: 2)],
+            []
+        ]
+        var didFinish = false
+
+        for matches in snapshots {
+            let stableBoard = StableBoardScan(matches: matches)
+            if stableBoard.canFinishResolve {
+                didFinish = true
+            } else {
+                XCTAssertTrue(controller.recordDetectedGroups(matches.count))
+            }
+        }
+
+        XCTAssertEqual(controller.generatedCombos, 3)
+        XCTAssertTrue(didFinish)
+        XCTAssertFalse(controller.needsAnotherCycle)
     }
 
     func testNewGameUsesEffectiveToggleValues() {
@@ -1074,20 +1161,37 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(controller.isComplete)
     }
 
-    func testSkyfallOffDoesNotRecordOrPlanControlledGroups() {
+    func testSkyfallOffDoesNotPlanControlledGroupsButRecordsNaturalGroups() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 0)
         let grid = OrbGrid()
         let slots = grid.emptyPositions()
         var generator = SeededGenerator(seed: 0)
 
-        XCTAssertFalse(controller.recordDetectedGroups(2))
+        XCTAssertFalse(controller.hasControlledTarget)
         XCTAssertNil(controller.makeControlledRefill(
             grid: grid,
             refillSlots: slots,
             using: &generator
         ))
-        XCTAssertEqual(controller.generatedCombos, 0)
+        XCTAssertTrue(controller.recordDetectedGroups(2))
+        XCTAssertEqual(controller.generatedCombos, 2)
+    }
+
+    func testEffectiveSkyfallZeroCannotFinishWhileNaturalMatchesRemain() {
+        let effectiveTarget = GameSettings.effectiveSkyfallComboCount(
+            enabled: false,
+            configured: 19
+        )
+        var types = matchTestBoardTypes()
+        for column in 0...2 { types[0][column] = .water }
+        let stableBoard = StableBoardScan(matches: MatchDetector().detect(
+            in: OrbGrid(types: types)
+        ))
+
+        XCTAssertEqual(effectiveTarget, 0)
+        XCTAssertFalse(stableBoard.matches.isEmpty)
+        XCTAssertFalse(stableBoard.canFinishResolve)
     }
 
     func testInitialPlusSkyfallExamplesHaveNoComboCap() {
