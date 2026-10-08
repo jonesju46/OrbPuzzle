@@ -161,7 +161,7 @@ final class GameScene: SKScene {
         addChild(timerFill)
 
 #if DEBUG
-        for _ in 0..<6 {
+        for _ in 0..<5 {
             let label = SKLabelNode(fontNamed: "Menlo")
             label.fontSize = 10
             label.fontColor = .white.withAlphaComponent(0.72)
@@ -545,6 +545,15 @@ final class GameScene: SKScene {
             finishResolution(resolveID: resolveID)
             return
         }
+#if DEBUG
+        let refillMode = !skyfallController.hasControlledTarget
+            ? "natural"
+            : (isControlledSkyfallRefill ? "controlled" : "safe")
+        let typeSummary = OrbType.allCases.map { type in
+            "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
+        }.joined(separator: " ")
+        print("[REFILL] mode=\(refillMode) count=\(plannedTypes.count) \(typeSummary)")
+#endif
 
         let preservedCount = orbNodes.count
         let result = refillController.refillEmptySlots(
@@ -593,6 +602,11 @@ final class GameScene: SKScene {
                 print("[SKYFALL] \(source) groups=\(matches.count) progress=\(self.skyfallController.generatedCombos)/\(self.skyfallController.requestedCombos)")
 #endif
             }
+#if DEBUG
+            if !isControlledSkyfallRefill {
+                print("[NATURAL] detected groups=\(matches.count) cumulative=\(self.skyfallController.generatedCombos)")
+            }
+#endif
 
             // Every refill path ends at the same stable-board full-grid scan.
             // Never finish while MatchDetector still reports a 3+ group.
@@ -752,17 +766,12 @@ final class GameScene: SKScene {
 
     private func updateDebugOverlay() {
 #if DEBUG
-        guard debugLabels.count == 6 else { return }
+        guard debugLabels.count == 5 else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
         debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
         debugLabels[3].text = comboController.breakdownText
-        if skyfallController.hasControlledTarget {
-            debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
-        } else {
-            debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)"
-        }
-        debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
+        debugLabels[4].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
 #endif
     }
 }
