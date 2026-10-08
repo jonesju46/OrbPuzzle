@@ -865,7 +865,8 @@ final class GameScene: SKScene {
             emptySlotCount: refillSlots.count
         )
         let friendlyPlan: FriendlyRefillPlan?
-        if let selectedTarget = friendlyDecision?.selectedTarget {
+        if let selectedTarget = friendlyDecision?.selectedTarget,
+           selectedTarget > 0 {
             friendlyPlan = skyfallController.makeFriendlyNaturalRefill(
                 grid: grid,
                 refillSlots: refillSlots,
@@ -888,13 +889,12 @@ final class GameScene: SKScene {
         if let friendlyDecision {
             print("[FRIENDLY_REFILL] previousGroups=\(friendlyDecision.previousResolvedGroupCount) emptySlots=\(friendlyDecision.emptySlotCount) physicalMax=\(friendlyDecision.physicalMaxGroups) candidateMax=\(friendlyDecision.candidateMaxGroups)")
             for attempt in friendlyDecision.rolls {
-                if let roll = attempt.roll {
-                    print(String(format: "[FRIENDLY_REFILL] roll%d=%.4f probability=%.2f success=%@", attempt.groupCount, roll, attempt.probability, attempt.succeeded.description))
-                } else {
-                    print("[FRIENDLY_REFILL] roll\(attempt.groupCount)=guaranteed probability=\(attempt.probability) success=true")
-                }
+                print(String(format: "[FRIENDLY_REFILL] roll%d=%.4f probability=%.2f success=%@", attempt.groupCount, attempt.roll, attempt.probability, attempt.succeeded.description))
             }
-            print("[FRIENDLY_REFILL] selectedTarget=\(friendlyDecision.selectedTarget.map { String($0) } ?? "none") plannedTarget=\(friendlyPlan?.plannedTarget.description ?? "none") actualResolved=\(previousResolvedGroupCount)")
+            print("[FRIENDLY_REFILL] selectedTarget=\(friendlyDecision.selectedTarget) plannedTarget=\(friendlyPlan?.plannedTarget.description ?? "none") actualResolved=\(previousResolvedGroupCount)")
+            if friendlyDecision.selectedTarget == 0 {
+                print("[FRIENDLY_REFILL] selectedTarget=0 friendlyStopped=true")
+            }
         }
 #endif
         let plannedTypes: [OrbType]?
@@ -906,8 +906,8 @@ final class GameScene: SKScene {
         } else if let friendlyPlan {
             plannedTypes = friendlyPlan.types
         } else {
-            // One-or-fewer previous groups, insufficient slots, or a planning
-            // failure uses non-forced refill. Existing natural matches remain.
+            // A zero target, insufficient slots, or a planning failure uses
+            // non-forced refill. Existing natural matches remain detectable.
             plannedTypes = skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         }
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {

@@ -3,7 +3,7 @@ import Foundation
 struct FriendlyRefillRoll: Equatable, Sendable {
     let groupCount: Int
     let probability: Double
-    let roll: Double?
+    let roll: Double
     let succeeded: Bool
 }
 
@@ -13,7 +13,7 @@ struct FriendlyRefillDecision: Equatable, Sendable {
     let physicalMaxGroups: Int
     let candidateMaxGroups: Int
     let rolls: [FriendlyRefillRoll]
-    let selectedTarget: Int?
+    let selectedTarget: Int
 }
 
 struct FriendlyRefillPlan: Equatable, Sendable {
@@ -24,8 +24,8 @@ struct FriendlyRefillPlan: Equatable, Sendable {
 enum FriendlyNaturalSkyfallPolicy {
     static let maximumGroupCount = 10
     static let refillProbabilities: [Double] = [
-        1.00, 0.90, 0.80, 0.70, 0.60,
-        0.50, 0.40, 0.30, 0.20, 0.10
+        0.50, 0.45, 0.40, 0.35, 0.30,
+        0.25, 0.20, 0.15, 0.10, 0.05
     ]
 
     static func refillProbability(for groupCount: Int) -> Double? {
@@ -45,39 +45,20 @@ enum FriendlyNaturalSkyfallPolicy {
             maximumGroupCount
         )
 
-        // One resolved group is the convergence boundary. The next refill is
-        // non-forced, so the chain can become stable or continue only naturally.
-        guard previousResolvedGroupCount > 1, candidateMaxGroups > 0 else {
+        guard candidateMaxGroups > 0 else {
             return FriendlyRefillDecision(
                 previousResolvedGroupCount: previousResolvedGroupCount,
                 emptySlotCount: emptySlotCount,
                 physicalMaxGroups: physicalMaxGroups,
                 candidateMaxGroups: candidateMaxGroups,
                 rolls: [],
-                selectedTarget: nil
+                selectedTarget: 0
             )
         }
 
         var attempts: [FriendlyRefillRoll] = []
         for groupCount in stride(from: candidateMaxGroups, through: 1, by: -1) {
             guard let probability = refillProbability(for: groupCount) else { continue }
-            if groupCount == 1 {
-                attempts.append(FriendlyRefillRoll(
-                    groupCount: groupCount,
-                    probability: probability,
-                    roll: nil,
-                    succeeded: true
-                ))
-                return FriendlyRefillDecision(
-                    previousResolvedGroupCount: previousResolvedGroupCount,
-                    emptySlotCount: emptySlotCount,
-                    physicalMaxGroups: physicalMaxGroups,
-                    candidateMaxGroups: candidateMaxGroups,
-                    rolls: attempts,
-                    selectedTarget: groupCount
-                )
-            }
-
             let value = roll(groupCount)
             let succeeded = value < probability
             attempts.append(FriendlyRefillRoll(
@@ -104,7 +85,7 @@ enum FriendlyNaturalSkyfallPolicy {
             physicalMaxGroups: physicalMaxGroups,
             candidateMaxGroups: candidateMaxGroups,
             rolls: attempts,
-            selectedTarget: nil
+            selectedTarget: 0
         )
     }
 }

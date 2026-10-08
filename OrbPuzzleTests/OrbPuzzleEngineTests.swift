@@ -533,7 +533,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
     }
 
     func testFriendlyRefillProbabilityTableUsesGroupCount() {
-        let expected = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+        let expected = [0.50, 0.45, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15, 0.10, 0.05]
 
         XCTAssertEqual(FriendlyNaturalSkyfallPolicy.maximumGroupCount, 10)
         for (offset, probability) in expected.enumerated() {
@@ -554,14 +554,16 @@ final class OrbPuzzleEngineTests: XCTestCase {
         ]
 
         for item in cases {
+            var attemptedGroups: [Int] = []
             let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
                 previousResolvedGroupCount: item.previous,
                 emptySlotCount: item.slots,
-                roll: { _ in 0.0 }
+                roll: { groupCount in attemptedGroups.append(groupCount); return 0.0 }
             )
             XCTAssertEqual(decision.physicalMaxGroups, item.physical)
             XCTAssertEqual(decision.candidateMaxGroups, item.candidate)
             XCTAssertEqual(decision.rolls.first?.groupCount, item.candidate)
+            XCTAssertFalse(attemptedGroups.contains { $0 > item.candidate })
         }
     }
 
@@ -585,38 +587,56 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(decision.rolls.map(\.groupCount), [5, 4, 3])
     }
 
-    func testFriendlyOneGroupIsGuaranteedAfterHigherTargetsFail() {
+    func testFriendlyAllCandidatesCanFailAndSelectZero() {
         var attemptedGroups: [Int] = []
         let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
-            previousResolvedGroupCount: 4,
-            emptySlotCount: 12,
+            previousResolvedGroupCount: 5,
+            emptySlotCount: 15,
             roll: { groupCount in
                 attemptedGroups.append(groupCount)
                 return 0.999
             }
         )
 
-        XCTAssertEqual(decision.selectedTarget, 1)
-        XCTAssertEqual(attemptedGroups, [4, 3, 2])
+        XCTAssertEqual(decision.selectedTarget, 0)
+        XCTAssertEqual(attemptedGroups, [5, 4, 3, 2, 1])
         XCTAssertEqual(decision.rolls.last?.groupCount, 1)
-        XCTAssertNil(decision.rolls.last?.roll)
-        XCTAssertTrue(decision.rolls.last?.succeeded == true)
+        XCTAssertEqual(decision.rolls.last?.roll, 0.999)
+        XCTAssertFalse(decision.rolls.last?.succeeded == true)
     }
 
-    func testFriendlySelectionStopsWhenPreviousResolvedGroupsIsZeroOrOne() {
-        for previousGroups in [0, 1] {
-            var didRoll = false
-            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
-                previousResolvedGroupCount: previousGroups,
-                emptySlotCount: 3,
-                roll: { _ in didRoll = true; return 0.0 }
-            )
+    func testFriendlyOneGroupCanContinueOrStop() {
+        let success = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 1,
+            emptySlotCount: 3,
+            roll: { _ in 0.49 }
+        )
+        let failure = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 1,
+            emptySlotCount: 3,
+            roll: { _ in 0.50 }
+        )
 
-            XCTAssertEqual(decision.candidateMaxGroups, previousGroups)
-            XCTAssertNil(decision.selectedTarget)
-            XCTAssertTrue(decision.rolls.isEmpty)
-            XCTAssertFalse(didRoll)
-        }
+        XCTAssertEqual(success.candidateMaxGroups, 1)
+        XCTAssertEqual(success.selectedTarget, 1)
+        XCTAssertEqual(success.rolls.map(\.groupCount), [1])
+        XCTAssertEqual(failure.candidateMaxGroups, 1)
+        XCTAssertEqual(failure.selectedTarget, 0)
+        XCTAssertEqual(failure.rolls.map(\.groupCount), [1])
+    }
+
+    func testFriendlySelectionWithNoCandidateSelectsZeroWithoutRolling() {
+        var didRoll = false
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 0,
+            emptySlotCount: 3,
+            roll: { _ in didRoll = true; return 0.0 }
+        )
+
+        XCTAssertEqual(decision.candidateMaxGroups, 0)
+        XCTAssertEqual(decision.selectedTarget, 0)
+        XCTAssertTrue(decision.rolls.isEmpty)
+        XCTAssertFalse(didRoll)
     }
 
     func testFriendlySelectionSkipsWhenFewerThanThreeSlotsExist() {
@@ -628,7 +648,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
         XCTAssertEqual(decision.physicalMaxGroups, 0)
         XCTAssertEqual(decision.candidateMaxGroups, 0)
-        XCTAssertNil(decision.selectedTarget)
+        XCTAssertEqual(decision.selectedTarget, 0)
     }
 
     func testControlledModeNeverUsesFriendlyRefillProbability() {
@@ -992,9 +1012,9 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let friendlyDecision = controller.selectFriendlyRefillTarget(
             previousResolvedGroupCount: 1,
             emptySlotCount: slots.count,
-            roll: { _ in XCTFail("One-group boundary must not roll"); return 0 }
+            roll: { _ in 0.99 }
         )
-        XCTAssertNil(friendlyDecision?.selectedTarget)
+        XCTAssertEqual(friendlyDecision?.selectedTarget, 0)
         var generator = SeededGenerator(seed: 317)
         guard let refillTypes = controller.makeSafeRefill(
             grid: grid,
