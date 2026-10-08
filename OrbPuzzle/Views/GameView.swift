@@ -37,7 +37,9 @@ struct GameView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Text("OrbPuzzle")
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
 
             ToolbarItem(placement: .topBarTrailing) {
@@ -100,7 +102,7 @@ struct GameView: View {
         } label: {
             Text("New Game")
                 .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 14)
                 .frame(height: 44)
                 .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
                 .overlay {

@@ -89,7 +89,9 @@ struct BattleState: Equatable, Sendable {
 
     var isGameOver: Bool { outcome == .gameOver }
     var isMonsterDefeated: Bool { outcome == .defeated }
-    var canAcceptInput: Bool { outcome == .active }
+    // A defeated MVP monster no longer performs battle actions, but the orb
+    // sandbox remains playable. Only player death locks board input.
+    var canAcceptInput: Bool { outcome != .gameOver }
 }
 
 struct BattleTurnResult: Equatable, Sendable {

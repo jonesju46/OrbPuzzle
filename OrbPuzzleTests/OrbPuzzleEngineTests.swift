@@ -194,7 +194,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(session.state.outcome, .defeated)
         XCTAssertFalse(result.monsterDidAttack)
         XCTAssertEqual(session.state.playerCurrentHP, 10_000)
-        XCTAssertFalse(session.state.canAcceptInput)
+        XCTAssertTrue(session.state.canAcceptInput)
     }
 
     func testMonsterAttackCanCauseGameOverAndDisableInput() {
@@ -216,6 +216,37 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(session.state.outcome, .gameOver)
         XCTAssertFalse(session.state.canAcceptInput)
         XCTAssertEqual(session.state.monsterCurrentCD, 1)
+    }
+
+    func testOnlyGameOverLocksBoardInput() {
+        var defeated = BattleSession(config: BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 1, attack: 2_000, baseCD: 3),
+            cards: [
+                CardConfig(attribute: .water, attack: 1, heartHealPercent: 0),
+                CardConfig(attribute: .fire, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .wood, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .light, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .dark, attack: 0, heartHealPercent: 0)
+            ]
+        ))
+        _ = defeated.resolveTurn(comboByType: [.water: 1])
+
+        var gameOver = BattleSession(
+            config: BattleConfig(
+                playerMaxHP: 1,
+                monster: MonsterConfig(maxHP: 10_000, attack: 1, baseCD: 1),
+                cards: BattleConfig.defaultCards.map {
+                    CardConfig(attribute: $0.attribute, attack: 0, heartHealPercent: 0)
+                }
+            )
+        )
+        _ = gameOver.resolveTurn(comboByType: [:])
+
+        XCTAssertEqual(defeated.state.outcome, .defeated)
+        XCTAssertTrue(defeated.state.canAcceptInput)
+        XCTAssertEqual(gameOver.state.outcome, .gameOver)
+        XCTAssertFalse(gameOver.state.canAcceptInput)
     }
 
     func testHeartHealIsAppliedBeforeMonsterAttack() {

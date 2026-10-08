@@ -388,12 +388,14 @@ final class GameScene: SKScene {
         }
 
         let headerY = cardCenterY + 59
-        let playerLabelY = headerY + 31
+        // Keep the HP label and bar clear of the large Combo line. The previous
+        // 31-point offset placed the bar directly through the Combo glyphs.
+        let playerLabelY = headerY + 49
         playerHPLabel.position = CGPoint(x: horizontalMargin, y: playerLabelY)
         playerFeedbackLabel.position = CGPoint(x: horizontalMargin + boardWidth, y: playerLabelY)
         playerHPBarFrame = CGRect(
             x: horizontalMargin,
-            y: playerLabelY - 17,
+            y: playerLabelY - 21,
             width: boardWidth,
             height: 7
         )
@@ -405,7 +407,7 @@ final class GameScene: SKScene {
         )
         playerHPFill.position = CGPoint(x: playerHPBarFrame.minX, y: playerHPBarFrame.midY)
 
-        let monsterCenterY = min(size.height - 24, playerLabelY + 46)
+        let monsterCenterY = min(size.height - 24, playerLabelY + 49)
         let monsterFrame = CGRect(
             x: horizontalMargin,
             y: monsterCenterY - 19,
