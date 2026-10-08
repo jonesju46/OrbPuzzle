@@ -651,6 +651,169 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(decision.selectedTarget, 0)
     }
 
+    func testZeroTargetRefillsEveryEmptySlotForMatchSizesThreeThroughSix() {
+        for matchSize in 3...6 {
+            var generator = SeededGenerator(seed: UInt64(700 + matchSize))
+            var board = stableBoardTypes()
+            for column in 0..<matchSize { board[4][column] = .fire }
+            if matchSize < OrbGrid.defaultColumns { board[4][matchSize] = .water }
+            let grid = OrbGrid(types: board)
+            let result = ResolveResult(matches: MatchDetector().detect(in: grid))
+
+            XCTAssertEqual(result.comboCount, 1, "size=\(matchSize)")
+            XCTAssertEqual(result.removedOrbCount, matchSize, "size=\(matchSize)")
+            XCTAssertEqual(grid.remove(result.removedPositions).count, matchSize, "size=\(matchSize)")
+            _ = grid.collapse()
+            let slots = grid.emptyPositions()
+            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                previousResolvedGroupCount: result.comboCount,
+                emptySlotCount: slots.count,
+                roll: { _ in 0.99 }
+            )
+            XCTAssertEqual(decision.selectedTarget, 0, "size=\(matchSize)")
+
+            guard let assignments = SkyfallController().makeNonForcedRefill(
+                grid: grid,
+                refillSlots: slots,
+                using: &generator
+            ) else {
+                XCTFail("Expected complete non-forced refill for size \(matchSize)")
+                continue
+            }
+            let spawns = grid.refill(types: assignments, at: slots)
+
+            XCTAssertEqual(slots.count, matchSize, "size=\(matchSize)")
+            XCTAssertEqual(assignments.count, matchSize, "size=\(matchSize)")
+            XCTAssertEqual(spawns.count, matchSize, "size=\(matchSize)")
+            XCTAssertEqual(grid.emptyPositions().count, 0, "size=\(matchSize)")
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30, "size=\(matchSize)")
+        }
+    }
+
+    func testOneTargetWithFiveRemovedOrbsStillRefillsAllFiveSlots() {
+        var generator = SeededGenerator(seed: 805)
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 5))
+        let result = ResolveResult(matches: MatchDetector().detect(in: grid))
+        _ = grid.remove(result.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        let controller = SkyfallController()
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: result.comboCount,
+            emptySlotCount: slots.count,
+            roll: { _ in 0.49 }
+        )
+
+        XCTAssertEqual(decision.selectedTarget, 1)
+        guard let plan = controller.makeFriendlyNaturalRefill(
+            grid: grid,
+            refillSlots: slots,
+            targetGroupCount: decision.selectedTarget,
+            using: &generator
+        ) else {
+            XCTFail("Expected one-group friendly plan for five empty slots")
+            return
+        }
+        let spawns = grid.refill(types: plan.types, at: slots)
+
+        XCTAssertEqual(slots.count, 5)
+        XCTAssertEqual(plan.types.count, 5)
+        XCTAssertEqual(spawns.count, 5)
+        XCTAssertEqual(grid.emptyPositions().count, 0)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testNormalizedFiveOrbShapesRefillFiveSlotsAtZeroTarget() {
+        let shapes: [Set<GridPosition>] = [
+            [
+                GridPosition(row: 2, column: 1), GridPosition(row: 2, column: 2),
+                GridPosition(row: 2, column: 3), GridPosition(row: 1, column: 2),
+                GridPosition(row: 0, column: 2)
+            ],
+            [
+                GridPosition(row: 0, column: 0), GridPosition(row: 1, column: 0),
+                GridPosition(row: 2, column: 0), GridPosition(row: 2, column: 1),
+                GridPosition(row: 2, column: 2)
+            ],
+            [
+                GridPosition(row: 2, column: 1), GridPosition(row: 2, column: 2),
+                GridPosition(row: 2, column: 3), GridPosition(row: 1, column: 2),
+                GridPosition(row: 3, column: 2)
+            ]
+        ]
+
+        for (index, positions) in shapes.enumerated() {
+            var generator = SeededGenerator(seed: UInt64(900 + index))
+            let grid = OrbGrid(types: stableBoardTypes())
+            let result = ResolveResult(matches: [MatchResult(type: .light, positions: positions)])
+            XCTAssertEqual(result.comboCount, 1)
+            XCTAssertEqual(result.removedOrbCount, 5)
+            _ = grid.remove(result.removedPositions)
+            _ = grid.collapse()
+            let slots = grid.emptyPositions()
+            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                previousResolvedGroupCount: result.comboCount,
+                emptySlotCount: slots.count,
+                roll: { _ in 0.99 }
+            )
+            XCTAssertEqual(decision.selectedTarget, 0, "shape=\(index)")
+            guard let assignments = SkyfallController().makeNonForcedRefill(
+                grid: grid,
+                refillSlots: slots,
+                using: &generator
+            ) else {
+                XCTFail("Expected complete shape refill index=\(index)")
+                continue
+            }
+            let spawns = grid.refill(types: assignments, at: slots)
+            XCTAssertEqual(assignments.count, 5, "shape=\(index)")
+            XCTAssertEqual(spawns.count, 5, "shape=\(index)")
+            XCTAssertEqual(grid.emptyPositions().count, 0, "shape=\(index)")
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30, "shape=\(index)")
+        }
+    }
+
+    func testMultipleGroupsRefillUnionOfAllEightRemovedPositions() {
+        var generator = SeededGenerator(seed: 1_008)
+        let grid = OrbGrid(types: stableBoardTypes())
+        let matches = [
+            MatchResult(
+                type: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })
+            ),
+            MatchResult(
+                type: .fire,
+                positions: Set((0..<5).map { GridPosition(row: 2, column: $0) })
+            )
+        ]
+        let result = ResolveResult(matches: matches)
+        XCTAssertEqual(result.comboCount, 2)
+        XCTAssertEqual(result.removedOrbCount, 8)
+        _ = grid.remove(result.removedPositions)
+        _ = grid.collapse()
+        let slots = grid.emptyPositions()
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: result.comboCount,
+            emptySlotCount: slots.count,
+            roll: { _ in 0.99 }
+        )
+        XCTAssertEqual(decision.selectedTarget, 0)
+        guard let assignments = SkyfallController().makeNonForcedRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        ) else {
+            XCTFail("Expected complete eight-slot non-forced refill")
+            return
+        }
+        let spawns = grid.refill(types: assignments, at: slots)
+        XCTAssertEqual(slots.count, 8)
+        XCTAssertEqual(assignments.count, 8)
+        XCTAssertEqual(spawns.count, 8)
+        XCTAssertEqual(grid.emptyPositions().count, 0)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
     func testControlledModeNeverUsesFriendlyRefillProbability() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 3)

@@ -139,6 +139,14 @@ final class SkyfallController {
         return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
     }
 
+    /// OFF-mode refill always returns one type for every current empty slot.
+    /// Prefer a match-avoiding assignment, then fall back to ordinary random
+    /// types so a safe-planning failure can never leave the board partially empty.
+    func makeNonForcedRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
+        var generator = SystemRandomNumberGenerator()
+        return makeNonForcedRefill(grid: grid, refillSlots: refillSlots, using: &generator)
+    }
+
     func makeFriendlyNaturalRefill(
         grid: OrbGrid,
         refillSlots: [GridPosition],
@@ -344,6 +352,24 @@ final class SkyfallController {
             return planned
         }
         return nil
+    }
+
+    func makeNonForcedRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        using generator: inout R
+    ) -> [OrbType]? {
+        guard refillSlots == grid.emptyPositions() else { return nil }
+        if let safeTypes = makeSafeRefill(
+            grid: grid,
+            refillSlots: refillSlots,
+            using: &generator
+        ), safeTypes.count == refillSlots.count {
+            return safeTypes
+        }
+        return makeNaturalRefill(grid: grid, refillSlots: refillSlots) {
+            OrbType.allCases.randomElement(using: &generator) ?? .fire
+        }
     }
 
     private func tripleCandidates(in slots: Set<GridPosition>) -> [[GridPosition]] {

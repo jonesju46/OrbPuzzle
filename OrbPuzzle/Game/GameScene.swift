@@ -845,12 +845,17 @@ final class GameScene: SKScene {
         gameState = .refilling
         // Always query after gravity; never reuse slots captured by an older cycle.
         let refillSlots = grid.emptyPositions()
-        guard refillSlots.count == expectedRefillCount else {
+        if refillSlots.count != expectedRefillCount {
 #if DEBUG
             print("[REFILL-BUG] expected=\(expectedRefillCount) slots=\(refillSlots.count)")
 #endif
-            finishResolution(resolveID: resolveID)
-            return
+            // Preserve the existing exact-target failure boundary for ON mode.
+            // OFF mode can safely use the actual empty positions as its source
+            // of truth because it has no configured target to satisfy.
+            if skyfallController.hasControlledTarget {
+                finishResolution(resolveID: resolveID)
+                return
+            }
         }
 
         // ON uses its unchanged exact-total planner. OFF derives this refill's
@@ -897,7 +902,7 @@ final class GameScene: SKScene {
             }
         }
 #endif
-        let plannedTypes: [OrbType]?
+        var plannedTypes: [OrbType]?
         if skyfallController.hasControlledTarget {
             // Natural and controlled groups share the exact ON target. Once the
             // total reaches it, safe refill prevents an active target + 1 group.
@@ -908,11 +913,24 @@ final class GameScene: SKScene {
         } else {
             // A zero target, insufficient slots, or a planning failure uses
             // non-forced refill. Existing natural matches remain detectable.
-            plannedTypes = skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+            plannedTypes = skyfallController.makeNonForcedRefill(
+                grid: grid,
+                refillSlots: refillSlots
+            )
+        }
+        if !skyfallController.hasControlledTarget,
+           plannedTypes?.count != refillSlots.count {
+#if DEBUG
+            print("[REFILL][ERROR] assignmentCount mismatch emptyBefore=\(refillSlots.count) assignmentCount=\(plannedTypes?.count ?? -1)")
+#endif
+            plannedTypes = skyfallController.makeNaturalRefill(
+                grid: grid,
+                refillSlots: refillSlots
+            )
         }
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
 #if DEBUG
-            print("[REFILL-BUG] unable to plan slot-only refill slots=\(refillSlots.count)")
+            print("[REFILL][ERROR] assignmentCount mismatch emptyBefore=\(refillSlots.count) assignmentCount=\(plannedTypes?.count ?? -1)")
 #endif
             finishResolution(resolveID: resolveID)
             return
@@ -945,6 +963,16 @@ final class GameScene: SKScene {
 #endif
         for node in result.nodes { orbNodes[node.orbID] = node }
 #if DEBUG
+        let emptyAfter = grid.emptyPositions().count
+        let occupiedAfter = grid.cells.flatMap { $0 }.compactMap { $0 }.count
+        let selectedTargetDescription = friendlyDecision.map { String($0.selectedTarget) } ?? "n/a"
+        print("[REFILL] removedOrbs=\(expectedRefillCount) emptyBefore=\(refillSlots.count) selectedTarget=\(selectedTargetDescription) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
+        if plannedTypes.count != refillSlots.count
+            || result.spawns.count != refillSlots.count
+            || emptyAfter != 0
+            || occupiedAfter != grid.rows * grid.columns {
+            print("[REFILL][ERROR] assignmentCount mismatch emptyBefore=\(refillSlots.count) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
+        }
         print("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
 #endif
         run(after: result.duration) { [weak self] in
