@@ -131,7 +131,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.comboCount, 0)
         XCTAssertEqual(controller.manualComboCount, 0)
         XCTAssertEqual(controller.skyfallComboCount, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 0 (0 + 0 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 0 (0 + 0)")
         for type in OrbType.allCases {
             XCTAssertEqual(controller.manualComboByType[type], 0)
             XCTAssertEqual(controller.skyfallComboByType[type], 0)
@@ -147,7 +147,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.manualComboCount, 5)
         XCTAssertEqual(controller.skyfallComboCount, 2)
         XCTAssertEqual(controller.comboCount, 7)
-        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2)")
     }
 
     func testNaturalAndControlledSkyfallShareOneSkyfallTotal() {
@@ -160,7 +160,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.manualComboCount, 3)
         XCTAssertEqual(controller.skyfallComboCount, 6)
         XCTAssertEqual(controller.comboCount, 9)
-        XCTAssertEqual(controller.breakdownText, "COMBO 9 (3 + 6 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 9 (3 + 6)")
     }
 
     func testSkyfallSettingOffStillDisplaysNaturalSkyfallBreakdown() {
@@ -174,7 +174,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         _ = controller.add(type: .heart, groups: 2, source: .skyfall)
 
         XCTAssertEqual(effectiveTarget, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2)")
     }
 
     func testInitialTShapeAddsExactlyOneManualCombo() {
@@ -189,7 +189,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.add(matches, source: .manual), 1)
         XCTAssertEqual(controller.manualComboCount, 1)
         XCTAssertEqual(controller.skyfallComboCount, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 1 (1 + 0 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 1 (1 + 0)")
         XCTAssertEqual(controller.manualComboByType[.heart], 1)
     }
 
@@ -205,84 +205,136 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.requestedCombos, 19)
     }
 
-    func testFriendlyNaturalContinuationProbabilityTable() {
+    func testFriendlyRefillProbabilityTableUsesGroupCount() {
         let expected = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
 
-        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.maximumComboCount, 10)
+        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.maximumGroupCount, 10)
         for (offset, probability) in expected.enumerated() {
             XCTAssertEqual(
-                FriendlyNaturalSkyfallPolicy.continuationProbability(for: offset + 1),
+                FriendlyNaturalSkyfallPolicy.refillProbability(for: offset + 1),
                 Optional(probability)
             )
         }
-        XCTAssertNil(FriendlyNaturalSkyfallPolicy.continuationProbability(for: 0))
-        XCTAssertNil(FriendlyNaturalSkyfallPolicy.continuationProbability(for: 11))
+        XCTAssertNil(FriendlyNaturalSkyfallPolicy.refillProbability(for: 0))
+        XCTAssertNil(FriendlyNaturalSkyfallPolicy.refillProbability(for: 11))
     }
 
-    func testFriendlyNaturalFirstComboIsGuaranteedWithoutRolling() {
-        let controller = SkyfallController()
-        controller.reset(requestedCombos: 0)
-        var didRoll = false
+    func testFriendlyCandidateMaxUsesPreviousGroupsAndPhysicalLimit() {
+        let cases = [
+            (previous: 8, slots: 24, physical: 8, candidate: 8),
+            (previous: 8, slots: 17, physical: 5, candidate: 5),
+            (previous: 3, slots: 24, physical: 8, candidate: 3)
+        ]
 
-        XCTAssertTrue(controller.shouldContinueFriendlyNaturalSkyfall {
-            didRoll = true
-            return 0.999
-        })
-        XCTAssertFalse(didRoll)
+        for item in cases {
+            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                previousResolvedGroupCount: item.previous,
+                emptySlotCount: item.slots,
+                roll: { _ in 0.0 }
+            )
+            XCTAssertEqual(decision.physicalMaxGroups, item.physical)
+            XCTAssertEqual(decision.candidateMaxGroups, item.candidate)
+            XCTAssertEqual(decision.rolls.first?.groupCount, item.candidate)
+        }
     }
 
-    func testControlledModeNeverUsesFriendlyNaturalProbability() {
+    func testFriendlyDescendingFirstSuccessSelectsThreeAndStops() {
+        var attemptedGroups: [Int] = []
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 5,
+            emptySlotCount: 15,
+            roll: { groupCount in
+                attemptedGroups.append(groupCount)
+                switch groupCount {
+                case 5, 4: return 0.99
+                case 3: return 0.10
+                default: return 0.0
+                }
+            }
+        )
+
+        XCTAssertEqual(decision.selectedTarget, 3)
+        XCTAssertEqual(attemptedGroups, [5, 4, 3])
+        XCTAssertEqual(decision.rolls.map(\.groupCount), [5, 4, 3])
+    }
+
+    func testFriendlyOneGroupIsGuaranteedAfterHigherTargetsFail() {
+        var attemptedGroups: [Int] = []
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 4,
+            emptySlotCount: 12,
+            roll: { groupCount in
+                attemptedGroups.append(groupCount)
+                return 0.999
+            }
+        )
+
+        XCTAssertEqual(decision.selectedTarget, 1)
+        XCTAssertEqual(attemptedGroups, [4, 3, 2])
+        XCTAssertEqual(decision.rolls.last?.groupCount, 1)
+        XCTAssertNil(decision.rolls.last?.roll)
+        XCTAssertTrue(decision.rolls.last?.succeeded == true)
+    }
+
+    func testFriendlySelectionStopsWhenPreviousResolvedGroupsIsZeroOrOne() {
+        for previousGroups in [0, 1] {
+            var didRoll = false
+            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                previousResolvedGroupCount: previousGroups,
+                emptySlotCount: 3,
+                roll: { _ in didRoll = true; return 0.0 }
+            )
+
+            XCTAssertEqual(decision.candidateMaxGroups, previousGroups)
+            XCTAssertNil(decision.selectedTarget)
+            XCTAssertTrue(decision.rolls.isEmpty)
+            XCTAssertFalse(didRoll)
+        }
+    }
+
+    func testFriendlySelectionSkipsWhenFewerThanThreeSlotsExist() {
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 8,
+            emptySlotCount: 2,
+            roll: { _ in XCTFail("Should not roll"); return 0.0 }
+        )
+
+        XCTAssertEqual(decision.physicalMaxGroups, 0)
+        XCTAssertEqual(decision.candidateMaxGroups, 0)
+        XCTAssertNil(decision.selectedTarget)
+    }
+
+    func testControlledModeNeverUsesFriendlyRefillProbability() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 3)
         var didRoll = false
 
-        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall {
-            didRoll = true
-            return 0.0
-        })
+        XCTAssertNil(controller.selectFriendlyRefillTarget(
+            previousResolvedGroupCount: 8,
+            emptySlotCount: 24,
+            roll: { _ in didRoll = true; return 0.0 }
+        ))
         XCTAssertFalse(didRoll)
     }
 
-    func testFriendlyNaturalSequentialRollsStopAtFour() {
-        let controller = SkyfallController()
-        controller.reset(requestedCombos: 0)
-        var rolls = [0.10, 0.10, 0.10, 0.90]
-        var rollIndex = 0
+    func testActualResolvedGroupsDetermineNextFriendlyCandidateMaximum() {
+        let manualDecision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 8,
+            emptySlotCount: 24,
+            roll: { groupCount in groupCount == 5 ? 0.0 : 0.99 }
+        )
+        let nextDecision = FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: 5,
+            emptySlotCount: 24,
+            roll: { _ in 0.0 }
+        )
 
-        while controller.shouldContinueFriendlyNaturalSkyfall(roll: {
-            defer { rollIndex += 1 }
-            return rolls[rollIndex]
-        }) {
-            XCTAssertTrue(controller.recordDetectedGroups(1))
-        }
-
-        XCTAssertEqual(controller.generatedCombos, 4)
-        XCTAssertEqual(rollIndex, 4)
+        XCTAssertEqual(manualDecision.selectedTarget, 5)
+        XCTAssertEqual(nextDecision.candidateMaxGroups, 5)
+        XCTAssertEqual(nextDecision.rolls.first?.groupCount, 5)
     }
 
-    func testFriendlyNaturalStopsAtOneWhenComboTwoRollFails() {
-        let controller = SkyfallController()
-        controller.reset(requestedCombos: 0)
-
-        XCTAssertTrue(controller.shouldContinueFriendlyNaturalSkyfall { 0.95 })
-        XCTAssertTrue(controller.recordDetectedGroups(1))
-        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall { 0.95 })
-        XCTAssertEqual(controller.generatedCombos, 1)
-    }
-
-    func testFriendlyNaturalAllZeroRollsStopAtTen() {
-        let controller = SkyfallController()
-        controller.reset(requestedCombos: 0)
-
-        while controller.shouldContinueFriendlyNaturalSkyfall(roll: { 0.0 }) {
-            XCTAssertTrue(controller.recordDetectedGroups(1))
-        }
-
-        XCTAssertEqual(controller.generatedCombos, 10)
-        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall { 0.0 })
-    }
-
-    func testFriendlyNaturalRefillCreatesRealMatchWithoutChangingExistingOrbs() {
+    func testFriendlyNaturalRefillCreatesPlannedRealMatchWithoutChangingExistingOrbs() {
         var generator = SeededGenerator(seed: 410)
         let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
         let result = ResolveResult(matches: MatchDetector().detect(in: grid))
@@ -296,15 +348,16 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 0)
 
-        guard let types = controller.makeFriendlyNaturalRefill(
+        guard let plan = controller.makeFriendlyNaturalRefill(
             grid: grid,
             refillSlots: slots,
+            targetGroupCount: 1,
             using: &generator
         ) else {
             XCTFail("Expected Friendly Natural refill plan")
             return
         }
-        _ = grid.refill(types: types, at: slots)
+        _ = grid.refill(types: plan.types, at: slots)
         let detected = MatchDetector().detect(in: grid)
         let after = Dictionary(uniqueKeysWithValues: grid.cells
             .flatMap { $0 }
@@ -313,6 +366,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             .map { ($0.id, $0.type) })
 
         XCTAssertEqual(detected.count, 1)
+        XCTAssertEqual(plan.plannedTarget, 1)
         XCTAssertEqual(after, existing)
     }
 
@@ -335,13 +389,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.manualComboCount, 8)
         XCTAssertEqual(controller.skyfallComboCount, 3)
         XCTAssertEqual(controller.comboCount, 11)
-        XCTAssertEqual(controller.breakdownText, "COMBO 11 (8 + 3 com)")
-        XCTAssertEqual(controller.breakdownText(for: .water), "水：1 + 1 com")
-        XCTAssertEqual(controller.breakdownText(for: .fire), "火：2 + 0 com")
-        XCTAssertEqual(controller.breakdownText(for: .wood), "木：1 + 1 com")
-        XCTAssertEqual(controller.breakdownText(for: .light), "光：2 + 0 com")
-        XCTAssertEqual(controller.breakdownText(for: .dark), "暗：1 + 1 com")
-        XCTAssertEqual(controller.breakdownText(for: .heart), "心：1 + 0 com")
+        XCTAssertEqual(controller.breakdownText, "COMBO 11 (8 + 3)")
+        XCTAssertEqual(controller.breakdownText(for: .water), "水：1 + 1")
+        XCTAssertEqual(controller.breakdownText(for: .fire), "火：2 + 0")
+        XCTAssertEqual(controller.breakdownText(for: .wood), "木：1 + 1")
+        XCTAssertEqual(controller.breakdownText(for: .light), "光：2 + 0")
+        XCTAssertEqual(controller.breakdownText(for: .dark), "暗：1 + 1")
+        XCTAssertEqual(controller.breakdownText(for: .heart), "心：1 + 0")
         XCTAssertEqual(controller.manualComboByType.values.reduce(0, +), controller.manualComboCount)
         XCTAssertEqual(controller.skyfallComboByType.values.reduce(0, +), controller.skyfallComboCount)
     }
@@ -355,7 +409,119 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
         XCTAssertEqual(controller.add(waterGroups, source: .manual), 2)
         XCTAssertEqual(controller.manualComboByType[.water], 2)
-        XCTAssertEqual(controller.breakdownText(for: .water), "水：2 + 0 com")
+        XCTAssertEqual(controller.breakdownText(for: .water), "水：2 + 0")
+    }
+
+    func testSessionStatisticsAveragesCompletedTurnsAndFormatsHUD() {
+        var statistics = SessionStatistics()
+        let turns: [(time: TimeInterval, combo: Int, water: Int)] = [
+            (8.0, 8, 2),
+            (10.0, 7, 0),
+            (10.5, 8, 1)
+        ]
+
+        for (index, turn) in turns.enumerated() {
+            XCTAssertTrue(statistics.commitCompletedTurn(
+                resolveID: UInt(index + 1),
+                moveTime: turn.time,
+                totalCombo: turn.combo,
+                comboTotalByType: [.water: turn.water]
+            ))
+        }
+
+        XCTAssertEqual(statistics.completedTurnCount, 3)
+        XCTAssertEqual(statistics.averageTurnTime, 9.5, accuracy: 0.000_1)
+        XCTAssertEqual(statistics.averageTotalCombo, 7.666_666, accuracy: 0.000_1)
+        XCTAssertEqual(statistics.averageCombo(for: .water), 1.0, accuracy: 0.000_1)
+        XCTAssertEqual(
+            GameplayStatusHUDText.time(current: 10.5, average: statistics.averageTurnTime),
+            "Time 10.5 [9.5]"
+        )
+        XCTAssertEqual(
+            GameplayStatusHUDText.combo(
+                currentBreakdown: "COMBO 8 (6 + 2)",
+                average: statistics.averageTotalCombo
+            ),
+            "COMBO 8 (6 + 2) [7.7]"
+        )
+        XCTAssertEqual(
+            GameplayStatusHUDText.orbType(
+                currentBreakdown: "水：1 + 0",
+                average: statistics.averageCombo(for: .water)
+            ),
+            "水：1 + 0 [1.0]"
+        )
+    }
+
+    func testSessionStatisticsCommitsEachResolveOnlyOnce() {
+        var statistics = SessionStatistics()
+
+        XCTAssertTrue(statistics.commitCompletedTurn(
+            resolveID: 7,
+            moveTime: 4.0,
+            totalCombo: 14,
+            comboTotalByType: [.water: 3]
+        ))
+        XCTAssertFalse(statistics.commitCompletedTurn(
+            resolveID: 7,
+            moveTime: 4.0,
+            totalCombo: 14,
+            comboTotalByType: [.water: 3]
+        ))
+
+        XCTAssertEqual(statistics.completedTurnCount, 1)
+        XCTAssertEqual(statistics.averageTurnTime, 4.0)
+        XCTAssertEqual(statistics.averageTotalCombo, 14.0)
+        XCTAssertEqual(statistics.averageCombo(for: .water), 3.0)
+    }
+
+    func testSessionStatisticsZeroSampleAndNewGameResetAreSafe() {
+        var statistics = SessionStatistics()
+
+        XCTAssertEqual(statistics.completedTurnCount, 0)
+        XCTAssertEqual(statistics.averageTurnTime, 0)
+        XCTAssertEqual(statistics.averageTotalCombo, 0)
+        XCTAssertEqual(statistics.averageCombo(for: .water), 0)
+        XCTAssertEqual(
+            GameplayStatusHUDText.time(current: 0, average: statistics.averageTurnTime),
+            "Time 0.0 [0.0]"
+        )
+
+        XCTAssertTrue(statistics.commitCompletedTurn(
+            resolveID: 1,
+            moveTime: 8,
+            totalCombo: 6,
+            comboTotalByType: [.fire: 2]
+        ))
+        statistics.reset()
+
+        XCTAssertEqual(statistics.completedTurnCount, 0)
+        XCTAssertEqual(statistics.turnTimeSum, 0)
+        XCTAssertEqual(statistics.totalComboSum, 0)
+        XCTAssertTrue(statistics.comboTotalSumByType.values.allSatisfy { $0 == 0 })
+        XCTAssertEqual(statistics.averageTurnTime, 0)
+        XCTAssertEqual(statistics.averageTotalCombo, 0)
+        XCTAssertEqual(statistics.averageCombo(for: .fire), 0)
+    }
+
+    func testTouchWithoutValidMovementDoesNotCreateSessionAverageSample() {
+        let timer = TurnController(duration: 30)
+        var statistics = SessionStatistics()
+
+        timer.select(orbID: UUID(), at: GridPosition(row: 0, column: 0), touchPosition: .zero)
+        timer.endGesture()
+        if let moveTime = timer.lastCompletedTurnTime {
+            statistics.commitCompletedTurn(
+                resolveID: 1,
+                moveTime: moveTime,
+                totalCombo: 0,
+                comboTotalByType: [:]
+            )
+        }
+
+        XCTAssertEqual(statistics.completedTurnCount, 0)
+        XCTAssertEqual(statistics.averageTurnTime, 0)
+        XCTAssertEqual(statistics.averageTotalCombo, 0)
     }
 
     func testNewGameUsesConfiguredTurnDuration() {
@@ -367,6 +533,9 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(scene.sessionSnapshot.remainingTime, 20, accuracy: 0.001)
         XCTAssertEqual(scene.sessionSnapshot.progress, 1, accuracy: 0.001)
         XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 19)
+        XCTAssertEqual(scene.sessionSnapshot.completedTurnCount, 0)
+        XCTAssertEqual(scene.sessionSnapshot.averageTurnTime, 0)
+        XCTAssertEqual(scene.sessionSnapshot.averageTotalCombo, 0)
     }
 
     func testOldCallbackIsRejectedAfterNewSessionBegins() {
@@ -457,6 +626,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
         _ = grid.remove(initialResult.removedPositions)
         _ = grid.collapse()
         let slots = grid.emptyPositions()
+        let friendlyDecision = controller.selectFriendlyRefillTarget(
+            previousResolvedGroupCount: 1,
+            emptySlotCount: slots.count,
+            roll: { _ in XCTFail("One-group boundary must not roll"); return 0 }
+        )
+        XCTAssertNil(friendlyDecision?.selectedTarget)
         var generator = SeededGenerator(seed: 317)
         guard let refillTypes = controller.makeSafeRefill(
             grid: grid,

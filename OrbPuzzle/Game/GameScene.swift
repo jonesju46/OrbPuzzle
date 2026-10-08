@@ -8,6 +8,7 @@ final class GameScene: SKScene {
     private let refillController = RefillController()
     private let comboController = ComboController()
     private let skyfallController = SkyfallController()
+    private var sessionStatistics = SessionStatistics()
     private lazy var turnController = TurnController(duration: GameSettings.effectiveTurnDuration(
         enabled: GameSettings.defaultTurnTimeEnabled,
         configured: GameSettings.defaultTurnDuration
@@ -74,7 +75,10 @@ final class GameScene: SKScene {
             remainingTime: turnController.remainingTime,
             progress: turnController.progress,
             resolveID: activeResolveID,
-            resolveLifecycleState: resolveLifecycle.state
+            resolveLifecycleState: resolveLifecycle.state,
+            completedTurnCount: sessionStatistics.completedTurnCount,
+            averageTurnTime: sessionStatistics.averageTurnTime,
+            averageTotalCombo: sessionStatistics.averageTotalCombo
         )
     }
 
@@ -103,6 +107,7 @@ final class GameScene: SKScene {
         resolveLifecycle = ResolveLifecycle()
         comboController.reset()
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
+        sessionStatistics.reset()
         turnController.resetSession()
         comboLabel.text = "Combo 0"
         comboLabel.alpha = 1
@@ -476,7 +481,11 @@ final class GameScene: SKScene {
             }
 
         case let .refill(expectedRefillCount: expectedRefillCount):
-            refillAndContinue(expectedRefillCount: expectedRefillCount, resolveID: resolveID)
+            refillAndContinue(
+                expectedRefillCount: expectedRefillCount,
+                previousResolvedGroupCount: result.comboCount,
+                resolveID: resolveID
+            )
         }
     }
 
@@ -507,7 +516,11 @@ final class GameScene: SKScene {
         }
     }
 
-    private func refillAndContinue(expectedRefillCount: Int, resolveID: UInt) {
+    private func refillAndContinue(
+        expectedRefillCount: Int,
+        previousResolvedGroupCount: Int,
+        resolveID: UInt
+    ) {
         guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
             logStaleCompletion("refill entry")
             return
@@ -523,18 +536,28 @@ final class GameScene: SKScene {
             return
         }
 
-        // ON uses an exact total target. OFF independently rolls the next
-        // Friendly Natural stage and never reads the ON continuation state.
+        // ON uses its unchanged exact-total planner. OFF derives this refill's
+        // candidate count from the previous snapshot's actual resolved groups.
         let controlledTypes = skyfallController.hasControlledTarget
             && skyfallController.needsAnotherCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : nil
         let isControlledSkyfallRefill = controlledTypes != nil
-        let shouldPlanFriendlyNatural = skyfallController.shouldContinueFriendlyNaturalSkyfall()
-        let friendlyTypes = shouldPlanFriendlyNatural
-            ? skyfallController.makeFriendlyNaturalRefill(grid: grid, refillSlots: refillSlots)
-            : nil
-        let isFriendlyNaturalRefill = friendlyTypes != nil
+        let friendlyDecision = skyfallController.selectFriendlyRefillTarget(
+            previousResolvedGroupCount: previousResolvedGroupCount,
+            emptySlotCount: refillSlots.count
+        )
+        let friendlyPlan: FriendlyRefillPlan?
+        if let selectedTarget = friendlyDecision?.selectedTarget {
+            friendlyPlan = skyfallController.makeFriendlyNaturalRefill(
+                grid: grid,
+                refillSlots: refillSlots,
+                targetGroupCount: selectedTarget
+            )
+        } else {
+            friendlyPlan = nil
+        }
+        let isFriendlyNaturalRefill = friendlyPlan != nil
         let isSafeRefill = !isControlledSkyfallRefill && !isFriendlyNaturalRefill
 
 #if DEBUG
@@ -545,6 +568,17 @@ final class GameScene: SKScene {
         } else {
             print("[REFILL] safe final begin slots=\(refillSlots.count)")
         }
+        if let friendlyDecision {
+            print("[FRIENDLY_REFILL] previousGroups=\(friendlyDecision.previousResolvedGroupCount) emptySlots=\(friendlyDecision.emptySlotCount) physicalMax=\(friendlyDecision.physicalMaxGroups) candidateMax=\(friendlyDecision.candidateMaxGroups)")
+            for attempt in friendlyDecision.rolls {
+                if let roll = attempt.roll {
+                    print(String(format: "[FRIENDLY_REFILL] roll%d=%.4f probability=%.2f success=%@", attempt.groupCount, roll, attempt.probability, attempt.succeeded.description))
+                } else {
+                    print("[FRIENDLY_REFILL] roll\(attempt.groupCount)=guaranteed probability=\(attempt.probability) success=true")
+                }
+            }
+            print("[FRIENDLY_REFILL] selectedTarget=\(friendlyDecision.selectedTarget.map { String($0) } ?? "none") plannedTarget=\(friendlyPlan?.plannedTarget.description ?? "none") actualResolved=\(previousResolvedGroupCount)")
+        }
 #endif
         let plannedTypes: [OrbType]?
         if skyfallController.hasControlledTarget {
@@ -552,12 +586,11 @@ final class GameScene: SKScene {
             // total reaches it, safe refill prevents an active target + 1 group.
             plannedTypes = controlledTypes
                 ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
-        } else if shouldPlanFriendlyNatural {
-            plannedTypes = friendlyTypes
-                ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        } else if let friendlyPlan {
+            plannedTypes = friendlyPlan.types
         } else {
-            // A failed continuation roll or the ten-combo ceiling ends OFF with
-            // a refill that does not intentionally create another match.
+            // One-or-fewer previous groups, insufficient slots, or a planning
+            // failure uses non-forced refill. Existing natural matches remain.
             plannedTypes = skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         }
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
@@ -627,6 +660,9 @@ final class GameScene: SKScene {
 #endif
             }
 #if DEBUG
+            if friendlyDecision != nil {
+                print("[FRIENDLY_REFILL] actualDetected=\(matches.count)")
+            }
             if isSafeRefill {
                 print("[NATURAL] detected groups=\(matches.count) cumulative=\(self.skyfallController.generatedCombos)")
             }
@@ -685,6 +721,14 @@ final class GameScene: SKScene {
             print("[RESOLVE] duplicate finish ignored")
 #endif
             return
+        }
+        if let finalTurnMoveTime = turnController.lastCompletedTurnTime {
+            sessionStatistics.commitCompletedTurn(
+                resolveID: resolveID,
+                moveTime: finalTurnMoveTime,
+                totalCombo: comboController.comboCount,
+                comboTotalByType: comboController.comboTotalByType
+            )
         }
 #if DEBUG
         print("[RESOLVE] finish begin")
@@ -795,11 +839,20 @@ final class GameScene: SKScene {
               orbTypeDebugLabels.count == OrbType.resolveOrder.count else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
-        debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
-        debugLabels[3].text = comboController.breakdownText
+        debugLabels[2].text = GameplayStatusHUDText.time(
+            current: turnController.displayedElapsedTurnTime,
+            average: sessionStatistics.averageTurnTime
+        )
+        debugLabels[3].text = GameplayStatusHUDText.combo(
+            currentBreakdown: comboController.breakdownText,
+            average: sessionStatistics.averageTotalCombo
+        )
         debugLabels[4].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
         for (index, type) in OrbType.resolveOrder.enumerated() {
-            orbTypeDebugLabels[index].text = comboController.breakdownText(for: type)
+            orbTypeDebugLabels[index].text = GameplayStatusHUDText.orbType(
+                currentBreakdown: comboController.breakdownText(for: type),
+                average: sessionStatistics.averageCombo(for: type)
+            )
         }
 #endif
     }

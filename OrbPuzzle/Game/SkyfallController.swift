@@ -1,21 +1,111 @@
 import Foundation
 
+struct FriendlyRefillRoll: Equatable, Sendable {
+    let groupCount: Int
+    let probability: Double
+    let roll: Double?
+    let succeeded: Bool
+}
+
+struct FriendlyRefillDecision: Equatable, Sendable {
+    let previousResolvedGroupCount: Int
+    let emptySlotCount: Int
+    let physicalMaxGroups: Int
+    let candidateMaxGroups: Int
+    let rolls: [FriendlyRefillRoll]
+    let selectedTarget: Int?
+}
+
+struct FriendlyRefillPlan: Equatable, Sendable {
+    let types: [OrbType]
+    let plannedTarget: Int
+}
+
 enum FriendlyNaturalSkyfallPolicy {
-    static let maximumComboCount = 10
-    static let continuationProbabilities: [Double] = [
+    static let maximumGroupCount = 10
+    static let refillProbabilities: [Double] = [
         1.00, 0.90, 0.80, 0.70, 0.60,
         0.50, 0.40, 0.30, 0.20, 0.10
     ]
 
-    static func continuationProbability(for comboIndex: Int) -> Double? {
-        guard (1...maximumComboCount).contains(comboIndex) else { return nil }
-        return continuationProbabilities[comboIndex - 1]
+    static func refillProbability(for groupCount: Int) -> Double? {
+        guard (1...maximumGroupCount).contains(groupCount) else { return nil }
+        return refillProbabilities[groupCount - 1]
     }
 
-    static func shouldContinue(to comboIndex: Int, roll: () -> Double) -> Bool {
-        guard let probability = continuationProbability(for: comboIndex) else { return false }
-        if comboIndex == 1 { return true }
-        return roll() < probability
+    static func selectTarget(
+        previousResolvedGroupCount: Int,
+        emptySlotCount: Int,
+        roll: (Int) -> Double
+    ) -> FriendlyRefillDecision {
+        let physicalMaxGroups = max(0, emptySlotCount) / 3
+        let candidateMaxGroups = min(
+            max(0, previousResolvedGroupCount),
+            physicalMaxGroups,
+            maximumGroupCount
+        )
+
+        // One resolved group is the convergence boundary. The next refill is
+        // non-forced, so the chain can become stable or continue only naturally.
+        guard previousResolvedGroupCount > 1, candidateMaxGroups > 0 else {
+            return FriendlyRefillDecision(
+                previousResolvedGroupCount: previousResolvedGroupCount,
+                emptySlotCount: emptySlotCount,
+                physicalMaxGroups: physicalMaxGroups,
+                candidateMaxGroups: candidateMaxGroups,
+                rolls: [],
+                selectedTarget: nil
+            )
+        }
+
+        var attempts: [FriendlyRefillRoll] = []
+        for groupCount in stride(from: candidateMaxGroups, through: 1, by: -1) {
+            guard let probability = refillProbability(for: groupCount) else { continue }
+            if groupCount == 1 {
+                attempts.append(FriendlyRefillRoll(
+                    groupCount: groupCount,
+                    probability: probability,
+                    roll: nil,
+                    succeeded: true
+                ))
+                return FriendlyRefillDecision(
+                    previousResolvedGroupCount: previousResolvedGroupCount,
+                    emptySlotCount: emptySlotCount,
+                    physicalMaxGroups: physicalMaxGroups,
+                    candidateMaxGroups: candidateMaxGroups,
+                    rolls: attempts,
+                    selectedTarget: groupCount
+                )
+            }
+
+            let value = roll(groupCount)
+            let succeeded = value < probability
+            attempts.append(FriendlyRefillRoll(
+                groupCount: groupCount,
+                probability: probability,
+                roll: value,
+                succeeded: succeeded
+            ))
+            if succeeded {
+                return FriendlyRefillDecision(
+                    previousResolvedGroupCount: previousResolvedGroupCount,
+                    emptySlotCount: emptySlotCount,
+                    physicalMaxGroups: physicalMaxGroups,
+                    candidateMaxGroups: candidateMaxGroups,
+                    rolls: attempts,
+                    selectedTarget: groupCount
+                )
+            }
+        }
+
+        return FriendlyRefillDecision(
+            previousResolvedGroupCount: previousResolvedGroupCount,
+            emptySlotCount: emptySlotCount,
+            physicalMaxGroups: physicalMaxGroups,
+            candidateMaxGroups: candidateMaxGroups,
+            rolls: attempts,
+            selectedTarget: nil
+        )
     }
 }
 
@@ -45,12 +135,15 @@ final class SkyfallController {
         return true
     }
 
-    func shouldContinueFriendlyNaturalSkyfall(
-        roll: () -> Double = { Double.random(in: 0..<1) }
-    ) -> Bool {
-        guard !hasControlledTarget else { return false }
-        return FriendlyNaturalSkyfallPolicy.shouldContinue(
-            to: generatedCombos + 1,
+    func selectFriendlyRefillTarget(
+        previousResolvedGroupCount: Int,
+        emptySlotCount: Int,
+        roll: (Int) -> Double = { _ in Double.random(in: 0..<1) }
+    ) -> FriendlyRefillDecision? {
+        guard !hasControlledTarget else { return nil }
+        return FriendlyNaturalSkyfallPolicy.selectTarget(
+            previousResolvedGroupCount: previousResolvedGroupCount,
+            emptySlotCount: emptySlotCount,
             roll: roll
         )
     }
@@ -65,11 +158,16 @@ final class SkyfallController {
         return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
     }
 
-    func makeFriendlyNaturalRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
+    func makeFriendlyNaturalRefill(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        targetGroupCount: Int
+    ) -> FriendlyRefillPlan? {
         var generator = SystemRandomNumberGenerator()
         return makeFriendlyNaturalRefill(
             grid: grid,
             refillSlots: refillSlots,
+            targetGroupCount: targetGroupCount,
             using: &generator
         )
     }
@@ -119,25 +217,45 @@ final class SkyfallController {
     func makeFriendlyNaturalRefill<R: RandomNumberGenerator>(
         grid: OrbGrid,
         refillSlots: [GridPosition],
+        targetGroupCount: Int,
         using generator: inout R
-    ) -> [OrbType]? {
+    ) -> FriendlyRefillPlan? {
         guard !hasControlledTarget,
-              generatedCombos < FriendlyNaturalSkyfallPolicy.maximumComboCount,
+              targetGroupCount > 0,
               refillSlots == grid.emptyPositions(),
               !refillSlots.isEmpty else { return nil }
 
         // Gravity may already have formed a real match from preserved orbs. Fill
         // only the empty slots safely and let the full-board detector resolve it.
         if !MatchDetector().detect(in: grid).isEmpty {
-            return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
+            guard let types = makeSafeRefill(
+                grid: grid,
+                refillSlots: refillSlots,
+                using: &generator
+            ) else { return nil }
+            let plannedTarget = MatchDetector().detect(
+                in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
+            ).count
+            return FriendlyRefillPlan(types: types, plannedTarget: plannedTarget)
         }
 
-        return makeMatchProducingRefill(
+        let maximumGroupCount = min(
+            targetGroupCount,
+            refillSlots.count / 3,
+            FriendlyNaturalSkyfallPolicy.maximumGroupCount
+        )
+        guard maximumGroupCount > 0,
+              let types = makeMatchProducingRefill(
             grid: grid,
             refillSlots: refillSlots,
-            maximumGroupCount: 1,
+            maximumGroupCount: maximumGroupCount,
             using: &generator
-        )
+        ) else { return nil }
+        let plannedTarget = MatchDetector().detect(
+            in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
+        ).count
+        guard plannedTarget > 0 else { return nil }
+        return FriendlyRefillPlan(types: types, plannedTarget: plannedTarget)
     }
 
     private func makeMatchProducingRefill<R: RandomNumberGenerator>(

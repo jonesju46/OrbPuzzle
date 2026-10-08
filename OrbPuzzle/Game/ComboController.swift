@@ -12,8 +12,13 @@ final class ComboController {
     var manualComboCount: Int { manualComboByType.values.reduce(0, +) }
     var skyfallComboCount: Int { skyfallComboByType.values.reduce(0, +) }
     var comboCount: Int { manualComboCount + skyfallComboCount }
+    var comboTotalByType: [OrbType: Int] {
+        Dictionary(uniqueKeysWithValues: OrbType.allCases.map { type in
+            (type, manualComboByType[type, default: 0] + skyfallComboByType[type, default: 0])
+        })
+    }
     var breakdownText: String {
-        "COMBO \(comboCount) (\(manualComboCount) + \(skyfallComboCount) com)"
+        "COMBO \(comboCount) (\(manualComboCount) + \(skyfallComboCount))"
     }
 
     func reset() {
@@ -44,7 +49,7 @@ final class ComboController {
     func breakdownText(for type: OrbType) -> String {
         let manual = manualComboByType[type, default: 0]
         let skyfall = skyfallComboByType[type, default: 0]
-        return "\(type.hudDisplayName)：\(manual) + \(skyfall) com"
+        return "\(type.hudDisplayName)：\(manual) + \(skyfall)"
     }
 
     func animate(label: SKLabelNode) {
