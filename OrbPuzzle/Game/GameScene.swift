@@ -278,6 +278,7 @@ final class GameScene: SKScene {
                   let displacedOrb = grid.orb(at: destination),
                   grid.swap(current, destination) else { continue }
             if !turnController.isTiming {
+                resetComboDisplay()
                 turnController.beginTiming(at: lastUpdateTime)
             }
             gameState = .dragging
@@ -348,30 +349,35 @@ final class GameScene: SKScene {
         let resolveID = activeResolveID
         resolveLifecycle.start()
         gameState = .resolving
-        comboController.reset()
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
-        comboLabel.text = "Combo 0"
         let initialMatches = matchDetector.detect(in: grid)
         guard !initialMatches.isEmpty else {
             finishResolution(resolveID: resolveID)
             return
         }
-        process(matches: initialMatches, resolveID: resolveID)
+        process(matches: initialMatches, source: .manual, resolveID: resolveID)
     }
 
-    private func process(matches: [MatchResult], resolveID: UInt) {
+    private func process(matches: [MatchResult], source: ComboSource, resolveID: UInt) {
         guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
             logStaleCompletion("process")
             return
         }
         let resolveResult = ResolveResult(matches: matches)
-        execute(resolveResult.steps, at: 0, result: resolveResult, resolveID: resolveID)
+        execute(
+            resolveResult.steps,
+            at: 0,
+            result: resolveResult,
+            source: source,
+            resolveID: resolveID
+        )
     }
 
     private func execute(
         _ steps: [ResolveStep],
         at index: Int,
         result: ResolveResult,
+        source: ComboSource,
         resolveID: UInt
     ) {
         guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
@@ -383,8 +389,9 @@ final class GameScene: SKScene {
         switch steps[index] {
         case let .remove(phase):
             gameState = .removing
-            comboController.add(groups: phase.comboIncrement)
+            comboController.add(groups: phase.comboIncrement, source: source)
             comboController.animate(label: comboLabel)
+            updateDebugOverlay()
             let removed = grid.remove(phase.removedPositions)
 #if DEBUG
             if removed.count != phase.removedOrbCount {
@@ -410,6 +417,7 @@ final class GameScene: SKScene {
                         steps,
                         at: index + 1,
                         result: result,
+                        source: source,
                         resolveID: resolveID
                     )
                 }
@@ -443,6 +451,7 @@ final class GameScene: SKScene {
                     steps,
                     at: index + 1,
                     result: result,
+                    source: source,
                     resolveID: resolveID
                 )
             }
@@ -588,7 +597,7 @@ final class GameScene: SKScene {
             // Every refill path ends at the same stable-board full-grid scan.
             // Never finish while MatchDetector still reports a 3+ group.
             if !stableBoard.canFinishResolve {
-                self.process(matches: matches, resolveID: resolveID)
+                self.process(matches: matches, source: .skyfall, resolveID: resolveID)
                 return
             }
 
@@ -629,7 +638,7 @@ final class GameScene: SKScene {
 #if DEBUG
             print("[MATCH-BUG] finish requested with matches count=\(stableBoard.matches.count); continuing resolve")
 #endif
-            process(matches: stableBoard.matches, resolveID: resolveID)
+            process(matches: stableBoard.matches, source: .skyfall, resolveID: resolveID)
             return
         }
         guard resolveLifecycle.finish() else {
@@ -732,13 +741,22 @@ final class GameScene: SKScene {
         timerFill.color = ratio > 0.5 ? .systemGreen : (ratio > 0.2 ? .systemOrange : .systemRed)
     }
 
+    private func resetComboDisplay() {
+        comboController.reset()
+        comboLabel.removeAllActions()
+        comboLabel.text = "Combo 0"
+        comboLabel.alpha = 1
+        comboLabel.setScale(1)
+        updateDebugOverlay()
+    }
+
     private func updateDebugOverlay() {
 #if DEBUG
         guard debugLabels.count == 6 else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
         debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
-        debugLabels[3].text = "Combo \(comboController.comboCount)"
+        debugLabels[3].text = comboController.breakdownText
         if skyfallController.hasControlledTarget {
             debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
         } else {

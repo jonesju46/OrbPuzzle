@@ -1,18 +1,38 @@
 import SpriteKit
 
+enum ComboSource {
+    case manual
+    case skyfall
+}
+
 final class ComboController {
-    private(set) var comboCount = 0
+    private(set) var manualComboCount = 0
+    private(set) var skyfallComboCount = 0
 
-    func reset() { comboCount = 0 }
+    var comboCount: Int { manualComboCount + skyfallComboCount }
+    var breakdownText: String {
+        "COMBO \(comboCount)  (\(manualComboCount) com + skyfull \(skyfallComboCount) com)"
+    }
 
-    @discardableResult
-    func add(_ matches: [MatchResult]) -> Int {
-        add(groups: matches.count)
+    func reset() {
+        manualComboCount = 0
+        skyfallComboCount = 0
     }
 
     @discardableResult
-    func add(groups: Int) -> Int {
-        comboCount += max(0, groups)
+    func add(_ matches: [MatchResult], source: ComboSource = .manual) -> Int {
+        add(groups: matches.count, source: source)
+    }
+
+    @discardableResult
+    func add(groups: Int, source: ComboSource = .manual) -> Int {
+        let increment = max(0, groups)
+        switch source {
+        case .manual:
+            manualComboCount += increment
+        case .skyfall:
+            skyfallComboCount += increment
+        }
         return comboCount
     }
 

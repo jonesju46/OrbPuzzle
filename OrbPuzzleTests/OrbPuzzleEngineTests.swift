@@ -29,10 +29,69 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let controller = ComboController()
         let matches = (0..<12).map { makeMatch(type: .fire, group: $0) }
         XCTAssertEqual(controller.add(matches), 12)
+        XCTAssertEqual(controller.manualComboCount, 12)
+        XCTAssertEqual(controller.skyfallComboCount, 0)
 
         controller.reset()
 
         XCTAssertEqual(controller.comboCount, 0)
+        XCTAssertEqual(controller.manualComboCount, 0)
+        XCTAssertEqual(controller.skyfallComboCount, 0)
+        XCTAssertEqual(controller.breakdownText, "COMBO 0  (0 com + skyfull 0 com)")
+    }
+
+    func testComboHUDBreakdownShowsManualFiveAndSkyfallTwo() {
+        let controller = ComboController()
+
+        XCTAssertEqual(controller.add(groups: 5, source: .manual), 5)
+        XCTAssertEqual(controller.add(groups: 2, source: .skyfall), 7)
+
+        XCTAssertEqual(controller.manualComboCount, 5)
+        XCTAssertEqual(controller.skyfallComboCount, 2)
+        XCTAssertEqual(controller.comboCount, 7)
+        XCTAssertEqual(controller.breakdownText, "COMBO 7  (5 com + skyfull 2 com)")
+    }
+
+    func testNaturalAndControlledSkyfallShareOneSkyfallTotal() {
+        let controller = ComboController()
+
+        _ = controller.add(groups: 3, source: .manual)
+        _ = controller.add(groups: 2, source: .skyfall)
+        _ = controller.add(groups: 4, source: .skyfall)
+
+        XCTAssertEqual(controller.manualComboCount, 3)
+        XCTAssertEqual(controller.skyfallComboCount, 6)
+        XCTAssertEqual(controller.comboCount, 9)
+        XCTAssertEqual(controller.breakdownText, "COMBO 9  (3 com + skyfull 6 com)")
+    }
+
+    func testSkyfallSettingOffStillDisplaysNaturalSkyfallBreakdown() {
+        let effectiveTarget = GameSettings.effectiveSkyfallComboCount(
+            enabled: false,
+            configured: 19
+        )
+        let controller = ComboController()
+
+        _ = controller.add(groups: 5, source: .manual)
+        _ = controller.add(groups: 2, source: .skyfall)
+
+        XCTAssertEqual(effectiveTarget, 0)
+        XCTAssertEqual(controller.breakdownText, "COMBO 7  (5 com + skyfull 2 com)")
+    }
+
+    func testInitialTShapeAddsExactlyOneManualCombo() {
+        let tShape = Set(
+            (0...2).map { GridPosition(row: 1, column: $0) }
+                + (0...2).map { GridPosition(row: $0, column: 1) }
+        )
+        let matches = MatchDetector().detect(in: gridWithHeart(at: tShape))
+        let controller = ComboController()
+
+        XCTAssertEqual(matches.count, 1)
+        XCTAssertEqual(controller.add(matches, source: .manual), 1)
+        XCTAssertEqual(controller.manualComboCount, 1)
+        XCTAssertEqual(controller.skyfallComboCount, 0)
+        XCTAssertEqual(controller.breakdownText, "COMBO 1  (1 com + skyfull 0 com)")
     }
 
     func testSkyfallResetClearsSevenOfNineteenProgress() {
