@@ -3,6 +3,21 @@ import XCTest
 @testable import OrbPuzzle
 
 final class OrbPuzzleEngineTests: XCTestCase {
+    func testIdleTimerPolicyDisablesOnlyForActiveScene() {
+        XCTAssertTrue(AppIdleTimerPolicy.shouldDisableIdleTimer(for: .active))
+        XCTAssertFalse(AppIdleTimerPolicy.shouldDisableIdleTimer(for: .inactive))
+        XCTAssertFalse(AppIdleTimerPolicy.shouldDisableIdleTimer(for: .background))
+    }
+
+    func testActiveSceneKeepsIdleTimerDisabledAcrossInAppDestinations() {
+        for destination in ["Gameplay", "Settings", "Home"] {
+            XCTAssertTrue(
+                AppIdleTimerPolicy.shouldDisableIdleTimer(for: .active),
+                "destination=\(destination)"
+            )
+        }
+    }
+
     func testComboSoundIndexLoopsEverySevenCombos() {
         let expected: [Int: Int] = [
             1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
