@@ -1,5 +1,24 @@
 import Foundation
 
+enum FriendlyNaturalSkyfallPolicy {
+    static let maximumComboCount = 10
+    static let continuationProbabilities: [Double] = [
+        1.00, 0.90, 0.80, 0.70, 0.60,
+        0.50, 0.40, 0.30, 0.20, 0.10
+    ]
+
+    static func continuationProbability(for comboIndex: Int) -> Double? {
+        guard (1...maximumComboCount).contains(comboIndex) else { return nil }
+        return continuationProbabilities[comboIndex - 1]
+    }
+
+    static func shouldContinue(to comboIndex: Int, roll: () -> Double) -> Bool {
+        guard let probability = continuationProbability(for: comboIndex) else { return false }
+        if comboIndex == 1 { return true }
+        return roll() < probability
+    }
+}
+
 /// Plans only the types for real empty refill slots. Existing Orb models are never
 /// replaced, so every skyfall cycle preserves all non-removed IDs and types.
 final class SkyfallController {
@@ -8,27 +27,32 @@ final class SkyfallController {
         configured: GameSettings.defaultSkyfallComboCount
     )
     private(set) var generatedCombos = 0
-    private(set) var controlledGeneratedCombos = 0
 
     var hasControlledTarget: Bool { requestedCombos > 0 }
-    var remainingCombos: Int { max(0, requestedCombos - controlledGeneratedCombos) }
-    var needsAnotherCycle: Bool { controlledGeneratedCombos < requestedCombos }
-    var isComplete: Bool { controlledGeneratedCombos >= requestedCombos }
+    var remainingCombos: Int { max(0, requestedCombos - generatedCombos) }
+    var needsAnotherCycle: Bool { hasControlledTarget && generatedCombos < requestedCombos }
+    var isComplete: Bool { generatedCombos >= requestedCombos }
 
     func reset(requestedCombos: Int) {
         self.requestedCombos = min(max(requestedCombos, 0), 99)
         generatedCombos = 0
-        controlledGeneratedCombos = 0
     }
 
     @discardableResult
-    func recordDetectedGroups(_ matchGroupCount: Int, controlled: Bool = true) -> Bool {
+    func recordDetectedGroups(_ matchGroupCount: Int) -> Bool {
         guard matchGroupCount > 0 else { return false }
         generatedCombos += matchGroupCount
-        if controlled, hasControlledTarget {
-            controlledGeneratedCombos += matchGroupCount
-        }
         return true
+    }
+
+    func shouldContinueFriendlyNaturalSkyfall(
+        roll: () -> Double = { Double.random(in: 0..<1) }
+    ) -> Bool {
+        guard !hasControlledTarget else { return false }
+        return FriendlyNaturalSkyfallPolicy.shouldContinue(
+            to: generatedCombos + 1,
+            roll: roll
+        )
     }
 
     func makeControlledRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
@@ -41,8 +65,17 @@ final class SkyfallController {
         return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
     }
 
-    /// Skyfall OFF disables guarantees, not chance. These types are deliberately
-    /// unfiltered so a normal refill may form zero or more natural match groups.
+    func makeFriendlyNaturalRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
+        var generator = SystemRandomNumberGenerator()
+        return makeFriendlyNaturalRefill(
+            grid: grid,
+            refillSlots: refillSlots,
+            using: &generator
+        )
+    }
+
+    /// Unfiltered six-color refill retained for deterministic natural-refill
+    /// tests and callers that explicitly request ordinary random generation.
     func makeNaturalRefill(grid: OrbGrid, refillSlots: [GridPosition]) -> [OrbType]? {
         return makeNaturalRefill(grid: grid, refillSlots: refillSlots) {
             OrbType.allCases.randomElement() ?? .fire
@@ -74,6 +107,45 @@ final class SkyfallController {
             (grid.rows * grid.columns) / 3
         )
         guard maximumGroupCount > 0 else { return nil }
+
+        return makeMatchProducingRefill(
+            grid: grid,
+            refillSlots: refillSlots,
+            maximumGroupCount: maximumGroupCount,
+            using: &generator
+        )
+    }
+
+    func makeFriendlyNaturalRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        using generator: inout R
+    ) -> [OrbType]? {
+        guard !hasControlledTarget,
+              generatedCombos < FriendlyNaturalSkyfallPolicy.maximumComboCount,
+              refillSlots == grid.emptyPositions(),
+              !refillSlots.isEmpty else { return nil }
+
+        // Gravity may already have formed a real match from preserved orbs. Fill
+        // only the empty slots safely and let the full-board detector resolve it.
+        if !MatchDetector().detect(in: grid).isEmpty {
+            return makeSafeRefill(grid: grid, refillSlots: refillSlots, using: &generator)
+        }
+
+        return makeMatchProducingRefill(
+            grid: grid,
+            refillSlots: refillSlots,
+            maximumGroupCount: 1,
+            using: &generator
+        )
+    }
+
+    private func makeMatchProducingRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        maximumGroupCount: Int,
+        using generator: inout R
+    ) -> [OrbType]? {
 
         if refillSlots.count <= 4 {
             return exhaustivePlan(

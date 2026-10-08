@@ -20,6 +20,17 @@ enum OrbType: String, CaseIterable, Codable, Sendable {
     ]
 
     var displayName: String { rawValue.capitalized }
+
+    var hudDisplayName: String {
+        switch self {
+        case .water: return "水"
+        case .fire: return "火"
+        case .wood: return "木"
+        case .light: return "光"
+        case .dark: return "暗"
+        case .heart: return "心"
+        }
+    }
 }
 
 struct Orb: Identifiable, Equatable, Sendable {

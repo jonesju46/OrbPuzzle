@@ -6,34 +6,45 @@ enum ComboSource {
 }
 
 final class ComboController {
-    private(set) var manualComboCount = 0
-    private(set) var skyfallComboCount = 0
+    private(set) var manualComboByType = ComboController.zeroedCounts()
+    private(set) var skyfallComboByType = ComboController.zeroedCounts()
 
+    var manualComboCount: Int { manualComboByType.values.reduce(0, +) }
+    var skyfallComboCount: Int { skyfallComboByType.values.reduce(0, +) }
     var comboCount: Int { manualComboCount + skyfallComboCount }
     var breakdownText: String {
-        "COMBO \(comboCount)  (\(manualComboCount) com + skyfull \(skyfallComboCount) com)"
+        "COMBO \(comboCount) (\(manualComboCount) + \(skyfallComboCount) com)"
     }
 
     func reset() {
-        manualComboCount = 0
-        skyfallComboCount = 0
+        manualComboByType = ComboController.zeroedCounts()
+        skyfallComboByType = ComboController.zeroedCounts()
     }
 
     @discardableResult
     func add(_ matches: [MatchResult], source: ComboSource = .manual) -> Int {
-        add(groups: matches.count, source: source)
+        for match in matches {
+            _ = add(type: match.type, groups: 1, source: source)
+        }
+        return comboCount
     }
 
     @discardableResult
-    func add(groups: Int, source: ComboSource = .manual) -> Int {
+    func add(type: OrbType, groups: Int, source: ComboSource = .manual) -> Int {
         let increment = max(0, groups)
         switch source {
         case .manual:
-            manualComboCount += increment
+            manualComboByType[type, default: 0] += increment
         case .skyfall:
-            skyfallComboCount += increment
+            skyfallComboByType[type, default: 0] += increment
         }
         return comboCount
+    }
+
+    func breakdownText(for type: OrbType) -> String {
+        let manual = manualComboByType[type, default: 0]
+        let skyfall = skyfallComboByType[type, default: 0]
+        return "\(type.hudDisplayName)：\(manual) + \(skyfall) com"
     }
 
     func animate(label: SKLabelNode) {
@@ -45,5 +56,9 @@ final class ComboController {
             .scale(to: 1.18, duration: GameSettings.Tuning.comboDisplayDuration * 0.45),
             .scale(to: 1.0, duration: GameSettings.Tuning.comboDisplayDuration * 0.55)
         ]))
+    }
+
+    private static func zeroedCounts() -> [OrbType: Int] {
+        Dictionary(uniqueKeysWithValues: OrbType.allCases.map { ($0, 0) })
     }
 }

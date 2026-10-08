@@ -21,6 +21,7 @@ final class GameScene: SKScene {
     private let timerFill = SKSpriteNode(color: .systemGreen, size: .zero)
     private var orbNodes: [UUID: OrbNode] = [:]
     private var debugLabels: [SKLabelNode] = []
+    private var orbTypeDebugLabels: [SKLabelNode] = []
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
     private var gameState: GameState = .idle {
@@ -170,6 +171,15 @@ final class GameScene: SKScene {
             addChild(label)
             debugLabels.append(label)
         }
+        for _ in OrbType.resolveOrder {
+            let label = SKLabelNode(fontNamed: "Menlo")
+            label.fontSize = 10
+            label.fontColor = .white.withAlphaComponent(0.72)
+            label.horizontalAlignmentMode = .left
+            label.zPosition = 100
+            addChild(label)
+            orbTypeDebugLabels.append(label)
+        }
 #endif
         layoutInterface()
         updateTimerUI()
@@ -196,6 +206,10 @@ final class GameScene: SKScene {
 #if DEBUG
         for (index, label) in debugLabels.enumerated() {
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - 18 - CGFloat(index) * 12)
+        }
+        let rightColumnX = horizontalMargin + boardWidth * 0.52
+        for (index, label) in orbTypeDebugLabels.enumerated() {
+            label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - 18 - CGFloat(index) * 12)
         }
 #endif
     }
@@ -389,7 +403,11 @@ final class GameScene: SKScene {
         switch steps[index] {
         case let .remove(phase):
             gameState = .removing
-            comboController.add(groups: phase.comboIncrement, source: source)
+            comboController.add(
+                type: phase.type,
+                groups: phase.comboIncrement,
+                source: source
+            )
             comboController.animate(label: comboLabel)
             updateDebugOverlay()
             let removed = grid.remove(phase.removedPositions)
@@ -504,39 +522,42 @@ final class GameScene: SKScene {
             return
         }
 
-        // Try a controlled refill only while quota remains. A preserved-board
-        // natural match makes the planner yield to a safe refill; the full-grid
-        // scan after the fall remains authoritative for every refill path.
-        let controlledTypes = skyfallController.needsAnotherCycle
+        // ON uses an exact total target. OFF independently rolls the next
+        // Friendly Natural stage and never reads the ON continuation state.
+        let controlledTypes = skyfallController.hasControlledTarget
+            && skyfallController.needsAnotherCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : nil
         let isControlledSkyfallRefill = controlledTypes != nil
-        let isNaturalChainRefill = skyfallController.needsAnotherCycle
-            && controlledTypes == nil
-        let isFinalRefill = !skyfallController.needsAnotherCycle
+        let shouldPlanFriendlyNatural = skyfallController.shouldContinueFriendlyNaturalSkyfall()
+        let friendlyTypes = shouldPlanFriendlyNatural
+            ? skyfallController.makeFriendlyNaturalRefill(grid: grid, refillSlots: refillSlots)
+            : nil
+        let isFriendlyNaturalRefill = friendlyTypes != nil
+        let isSafeRefill = !isControlledSkyfallRefill && !isFriendlyNaturalRefill
 
 #if DEBUG
         if isControlledSkyfallRefill {
-            print("[SKYFALL] controlled batch begin progress=\(skyfallController.controlledGeneratedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
-        } else if isNaturalChainRefill {
-            print("[MATCH] safe chain refill before stable-board scan")
+            print("[SKYFALL] controlled batch begin progress=\(skyfallController.generatedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
+        } else if isFriendlyNaturalRefill {
+            print("[SKYFALL] friendly natural begin next=\(skyfallController.generatedCombos + 1) slots=\(refillSlots.count)")
         } else {
-            print("[REFILL] final begin slots=\(refillSlots.count)")
+            print("[REFILL] safe final begin slots=\(refillSlots.count)")
         }
 #endif
         let plannedTypes: [OrbType]?
-        if skyfallController.hasControlledTarget, !isFinalRefill {
-            // While the controlled quota is pending, preserve the existing
-            // controlled-plan-or-safe-fallback behavior.
+        if skyfallController.hasControlledTarget {
+            // Natural and controlled groups share the exact ON target. Once the
+            // total reaches it, safe refill prevents an active target + 1 group.
             plannedTypes = controlledTypes
                 ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
+        } else if shouldPlanFriendlyNatural {
+            plannedTypes = friendlyTypes
+                ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         } else {
-            // OFF and completed ON targets both use ordinary random refill so
-            // naturally formed groups remain possible and detectable.
-            plannedTypes = skyfallController.makeNaturalRefill(
-                grid: grid,
-                refillSlots: refillSlots
-            )
+            // A failed continuation roll or the ten-combo ceiling ends OFF with
+            // a refill that does not intentionally create another match.
+            plannedTypes = skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
         }
         guard let plannedTypes, plannedTypes.count == refillSlots.count else {
 #if DEBUG
@@ -548,7 +569,7 @@ final class GameScene: SKScene {
 #if DEBUG
         let refillMode = isControlledSkyfallRefill
             ? "controlled"
-            : ((skyfallController.hasControlledTarget && !isFinalRefill) ? "safe" : "natural")
+            : (isFriendlyNaturalRefill ? "friendly-natural" : "safe")
         let typeSummary = OrbType.allCases.map { type in
             "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
         }.joined(separator: " ")
@@ -585,7 +606,7 @@ final class GameScene: SKScene {
             let stableBoard = StableBoardScan(matches: self.matchDetector.detect(in: self.grid))
             let matches = stableBoard.matches
 
-            if isControlledSkyfallRefill {
+            if isControlledSkyfallRefill || isFriendlyNaturalRefill {
                 guard self.resolveLifecycle.acceptsSkyfallCompletion else {
                     self.logStaleCompletion("skyfall cycle")
                     return
@@ -596,17 +617,16 @@ final class GameScene: SKScene {
             // Initial/manual matches are processed before the first refill and
             // never enter this counter. Every post-refill full-board detection,
             // controlled or natural, contributes its actual normalized groups.
-            if self.skyfallController.recordDetectedGroups(
-                matches.count,
-                controlled: isControlledSkyfallRefill
-            ) {
+            if self.skyfallController.recordDetectedGroups(matches.count) {
 #if DEBUG
-                let source = isControlledSkyfallRefill ? "controlled" : "natural"
-                print("[SKYFALL] \(source) groups=\(matches.count) controlled=\(self.skyfallController.controlledGeneratedCombos)/\(self.skyfallController.requestedCombos) total=\(self.skyfallController.generatedCombos)")
+                let source = isControlledSkyfallRefill
+                    ? "controlled"
+                    : (isFriendlyNaturalRefill ? "friendly-natural" : "natural")
+                print("[SKYFALL] \(source) groups=\(matches.count) total=\(self.skyfallController.generatedCombos) target=\(self.skyfallController.requestedCombos)")
 #endif
             }
 #if DEBUG
-            if !isControlledSkyfallRefill {
+            if isSafeRefill {
                 print("[NATURAL] detected groups=\(matches.count) cumulative=\(self.skyfallController.generatedCombos)")
             }
 #endif
@@ -618,17 +638,18 @@ final class GameScene: SKScene {
                 return
             }
 
-            if isControlledSkyfallRefill {
+            if isControlledSkyfallRefill || isFriendlyNaturalRefill {
 #if DEBUG
-                print("[SKYFALL-BUG] controlled refill produced no match")
+                print("[SKYFALL-BUG] match-producing refill produced no match")
 #endif
                 self.finishResolution(resolveID: resolveID)
                 return
             }
 
-            guard isFinalRefill || !self.skyfallController.needsAnotherCycle else {
+            guard !self.skyfallController.hasControlledTarget
+                    || !self.skyfallController.needsAnotherCycle else {
 #if DEBUG
-                print("[MATCH-BUG] natural chain disappeared before full-board scan")
+                print("[MATCH-BUG] controlled target stalled before full-board scan")
 #endif
                 self.finishResolution(resolveID: resolveID)
                 return
@@ -769,12 +790,16 @@ final class GameScene: SKScene {
 
     private func updateDebugOverlay() {
 #if DEBUG
-        guard debugLabels.count == 5 else { return }
+        guard debugLabels.count == 5,
+              orbTypeDebugLabels.count == OrbType.resolveOrder.count else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
         debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
         debugLabels[3].text = comboController.breakdownText
         debugLabels[4].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
+        for (index, type) in OrbType.resolveOrder.enumerated() {
+            orbTypeDebugLabels[index].text = comboController.breakdownText(for: type)
+        }
 #endif
     }
 }

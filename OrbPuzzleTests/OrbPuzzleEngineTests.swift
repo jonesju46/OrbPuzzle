@@ -37,32 +37,36 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.comboCount, 0)
         XCTAssertEqual(controller.manualComboCount, 0)
         XCTAssertEqual(controller.skyfallComboCount, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 0  (0 com + skyfull 0 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 0 (0 + 0 com)")
+        for type in OrbType.allCases {
+            XCTAssertEqual(controller.manualComboByType[type], 0)
+            XCTAssertEqual(controller.skyfallComboByType[type], 0)
+        }
     }
 
     func testComboHUDBreakdownShowsManualFiveAndSkyfallTwo() {
         let controller = ComboController()
 
-        XCTAssertEqual(controller.add(groups: 5, source: .manual), 5)
-        XCTAssertEqual(controller.add(groups: 2, source: .skyfall), 7)
+        XCTAssertEqual(controller.add(type: .fire, groups: 5, source: .manual), 5)
+        XCTAssertEqual(controller.add(type: .water, groups: 2, source: .skyfall), 7)
 
         XCTAssertEqual(controller.manualComboCount, 5)
         XCTAssertEqual(controller.skyfallComboCount, 2)
         XCTAssertEqual(controller.comboCount, 7)
-        XCTAssertEqual(controller.breakdownText, "COMBO 7  (5 com + skyfull 2 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2 com)")
     }
 
     func testNaturalAndControlledSkyfallShareOneSkyfallTotal() {
         let controller = ComboController()
 
-        _ = controller.add(groups: 3, source: .manual)
-        _ = controller.add(groups: 2, source: .skyfall)
-        _ = controller.add(groups: 4, source: .skyfall)
+        _ = controller.add(type: .wood, groups: 3, source: .manual)
+        _ = controller.add(type: .water, groups: 2, source: .skyfall)
+        _ = controller.add(type: .dark, groups: 4, source: .skyfall)
 
         XCTAssertEqual(controller.manualComboCount, 3)
         XCTAssertEqual(controller.skyfallComboCount, 6)
         XCTAssertEqual(controller.comboCount, 9)
-        XCTAssertEqual(controller.breakdownText, "COMBO 9  (3 com + skyfull 6 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 9 (3 + 6 com)")
     }
 
     func testSkyfallSettingOffStillDisplaysNaturalSkyfallBreakdown() {
@@ -72,11 +76,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
         )
         let controller = ComboController()
 
-        _ = controller.add(groups: 5, source: .manual)
-        _ = controller.add(groups: 2, source: .skyfall)
+        _ = controller.add(type: .fire, groups: 5, source: .manual)
+        _ = controller.add(type: .heart, groups: 2, source: .skyfall)
 
         XCTAssertEqual(effectiveTarget, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 7  (5 com + skyfull 2 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 7 (5 + 2 com)")
     }
 
     func testInitialTShapeAddsExactlyOneManualCombo() {
@@ -91,7 +95,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.add(matches, source: .manual), 1)
         XCTAssertEqual(controller.manualComboCount, 1)
         XCTAssertEqual(controller.skyfallComboCount, 0)
-        XCTAssertEqual(controller.breakdownText, "COMBO 1  (1 com + skyfull 0 com)")
+        XCTAssertEqual(controller.breakdownText, "COMBO 1 (1 + 0 com)")
+        XCTAssertEqual(controller.manualComboByType[.heart], 1)
     }
 
     func testSkyfallResetClearsSevenOfNineteenProgress() {
@@ -99,13 +104,164 @@ final class OrbPuzzleEngineTests: XCTestCase {
         controller.reset(requestedCombos: 19)
         XCTAssertTrue(controller.recordDetectedGroups(7))
         XCTAssertEqual(controller.generatedCombos, 7)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 7)
 
         controller.reset(requestedCombos: 19)
 
         XCTAssertEqual(controller.generatedCombos, 0)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
         XCTAssertEqual(controller.requestedCombos, 19)
+    }
+
+    func testFriendlyNaturalContinuationProbabilityTable() {
+        let expected = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1]
+
+        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.maximumComboCount, 10)
+        for (offset, probability) in expected.enumerated() {
+            XCTAssertEqual(
+                FriendlyNaturalSkyfallPolicy.continuationProbability(for: offset + 1),
+                Optional(probability)
+            )
+        }
+        XCTAssertNil(FriendlyNaturalSkyfallPolicy.continuationProbability(for: 0))
+        XCTAssertNil(FriendlyNaturalSkyfallPolicy.continuationProbability(for: 11))
+    }
+
+    func testFriendlyNaturalFirstComboIsGuaranteedWithoutRolling() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        var didRoll = false
+
+        XCTAssertTrue(controller.shouldContinueFriendlyNaturalSkyfall {
+            didRoll = true
+            return 0.999
+        })
+        XCTAssertFalse(didRoll)
+    }
+
+    func testControlledModeNeverUsesFriendlyNaturalProbability() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 3)
+        var didRoll = false
+
+        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall {
+            didRoll = true
+            return 0.0
+        })
+        XCTAssertFalse(didRoll)
+    }
+
+    func testFriendlyNaturalSequentialRollsStopAtFour() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+        var rolls = [0.10, 0.10, 0.10, 0.90]
+        var rollIndex = 0
+
+        while controller.shouldContinueFriendlyNaturalSkyfall(roll: {
+            defer { rollIndex += 1 }
+            return rolls[rollIndex]
+        }) {
+            XCTAssertTrue(controller.recordDetectedGroups(1))
+        }
+
+        XCTAssertEqual(controller.generatedCombos, 4)
+        XCTAssertEqual(rollIndex, 4)
+    }
+
+    func testFriendlyNaturalStopsAtOneWhenComboTwoRollFails() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+
+        XCTAssertTrue(controller.shouldContinueFriendlyNaturalSkyfall { 0.95 })
+        XCTAssertTrue(controller.recordDetectedGroups(1))
+        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall { 0.95 })
+        XCTAssertEqual(controller.generatedCombos, 1)
+    }
+
+    func testFriendlyNaturalAllZeroRollsStopAtTen() {
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+
+        while controller.shouldContinueFriendlyNaturalSkyfall(roll: { 0.0 }) {
+            XCTAssertTrue(controller.recordDetectedGroups(1))
+        }
+
+        XCTAssertEqual(controller.generatedCombos, 10)
+        XCTAssertFalse(controller.shouldContinueFriendlyNaturalSkyfall { 0.0 })
+    }
+
+    func testFriendlyNaturalRefillCreatesRealMatchWithoutChangingExistingOrbs() {
+        var generator = SeededGenerator(seed: 410)
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        let result = ResolveResult(matches: MatchDetector().detect(in: grid))
+        _ = grid.remove(result.removedPositions)
+        _ = grid.collapse()
+        let existing = Dictionary(uniqueKeysWithValues: grid.cells
+            .flatMap { $0 }
+            .compactMap { $0 }
+            .map { ($0.id, $0.type) })
+        let slots = grid.emptyPositions()
+        let controller = SkyfallController()
+        controller.reset(requestedCombos: 0)
+
+        guard let types = controller.makeFriendlyNaturalRefill(
+            grid: grid,
+            refillSlots: slots,
+            using: &generator
+        ) else {
+            XCTFail("Expected Friendly Natural refill plan")
+            return
+        }
+        _ = grid.refill(types: types, at: slots)
+        let detected = MatchDetector().detect(in: grid)
+        let after = Dictionary(uniqueKeysWithValues: grid.cells
+            .flatMap { $0 }
+            .compactMap { $0 }
+            .filter { existing[$0.id] != nil }
+            .map { ($0.id, $0.type) })
+
+        XCTAssertEqual(detected.count, 1)
+        XCTAssertEqual(after, existing)
+    }
+
+    func testPerElementHUDCountsNormalizedManualAndSkyfallGroups() {
+        let controller = ComboController()
+        let manualCounts: [OrbType: Int] = [
+            .water: 1, .fire: 2, .wood: 1,
+            .light: 2, .dark: 1, .heart: 1
+        ]
+        let skyfallCounts: [OrbType: Int] = [
+            .water: 1, .fire: 0, .wood: 1,
+            .light: 0, .dark: 1, .heart: 0
+        ]
+
+        for type in OrbType.resolveOrder {
+            _ = controller.add(type: type, groups: manualCounts[type, default: 0], source: .manual)
+            _ = controller.add(type: type, groups: skyfallCounts[type, default: 0], source: .skyfall)
+        }
+
+        XCTAssertEqual(controller.manualComboCount, 8)
+        XCTAssertEqual(controller.skyfallComboCount, 3)
+        XCTAssertEqual(controller.comboCount, 11)
+        XCTAssertEqual(controller.breakdownText, "COMBO 11 (8 + 3 com)")
+        XCTAssertEqual(controller.breakdownText(for: .water), "水：1 + 1 com")
+        XCTAssertEqual(controller.breakdownText(for: .fire), "火：2 + 0 com")
+        XCTAssertEqual(controller.breakdownText(for: .wood), "木：1 + 1 com")
+        XCTAssertEqual(controller.breakdownText(for: .light), "光：2 + 0 com")
+        XCTAssertEqual(controller.breakdownText(for: .dark), "暗：1 + 1 com")
+        XCTAssertEqual(controller.breakdownText(for: .heart), "心：1 + 0 com")
+        XCTAssertEqual(controller.manualComboByType.values.reduce(0, +), controller.manualComboCount)
+        XCTAssertEqual(controller.skyfallComboByType.values.reduce(0, +), controller.skyfallComboCount)
+    }
+
+    func testDisconnectedSameTypeGroupsIncrementThatTypeTwice() {
+        let controller = ComboController()
+        let waterGroups = [
+            makeMatch(type: .water, group: 0),
+            makeMatch(type: .water, group: 2)
+        ]
+
+        XCTAssertEqual(controller.add(waterGroups, source: .manual), 2)
+        XCTAssertEqual(controller.manualComboByType[.water], 2)
+        XCTAssertEqual(controller.breakdownText(for: .water), "水：2 + 0 com")
     }
 
     func testNewGameUsesConfiguredTurnDuration() {
@@ -225,12 +381,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(naturalMatches.count, 1)
         XCTAssertEqual(naturalMatches[0].type, .light)
         XCTAssertFalse(StableBoardScan(matches: naturalMatches).canFinishResolve)
-        XCTAssertTrue(controller.recordDetectedGroups(
-            naturalMatches.count,
-            controlled: false
-        ))
+        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
         XCTAssertEqual(controller.generatedCombos, 1)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
         XCTAssertEqual(controller.remainingCombos, 0)
         XCTAssertFalse(controller.needsAnotherCycle)
     }
@@ -1123,7 +1275,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(controller.needsAnotherCycle)
     }
 
-    func testExistingNaturalMatchTakesPriorityOverControlledPlanning() {
+    func testExistingNaturalMatchCountsTowardExactControlledTarget() {
         var types = matchTestBoardTypes()
         for row in [0, 2, 4] { types[row][0] = .light }
         for row in [1, 3] {
@@ -1146,13 +1298,9 @@ final class OrbPuzzleEngineTests: XCTestCase {
             refillSlots: slots,
             using: &generator
         ))
-        XCTAssertTrue(controller.recordDetectedGroups(
-            naturalMatches.count,
-            controlled: false
-        ))
+        XCTAssertTrue(controller.recordDetectedGroups(naturalMatches.count))
         XCTAssertEqual(controller.generatedCombos, 1)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
-        XCTAssertEqual(controller.remainingCombos, 10)
+        XCTAssertEqual(controller.remainingCombos, 9)
         XCTAssertTrue(controller.needsAnotherCycle)
     }
 
@@ -1183,6 +1331,23 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertEqual(outcome.nextCycleCount, expectedCycles - 1)
             XCTAssertEqual(outcome.lifecycle.finalRefillCount, 1)
             XCTAssertEqual(outcome.lifecycle.finishCount, 1)
+        }
+    }
+
+    func testControlledTargetsFinishAtExactConfiguredTotal() {
+        for target in [1, 3, 5, 10, 19, 99] {
+            let controller = SkyfallController()
+            controller.reset(requestedCombos: target)
+
+            while controller.needsAnotherCycle {
+                XCTAssertTrue(controller.recordDetectedGroups(
+                    min(3, controller.remainingCombos)
+                ))
+            }
+
+            XCTAssertEqual(controller.generatedCombos, target, "target=\(target)")
+            XCTAssertEqual(controller.remainingCombos, 0, "target=\(target)")
+            XCTAssertTrue(controller.isComplete, "target=\(target)")
         }
     }
 
@@ -1222,42 +1387,31 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(grid.emptyPositions().count, 0)
     }
 
-    func testNaturalMatchesDoNotReduceControlledTarget() {
+    func testNaturalMatchesReduceRemainingExactTarget() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 3)
 
-        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
+        XCTAssertTrue(controller.recordDetectedGroups(2))
         XCTAssertEqual(controller.generatedCombos, 2)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
-        XCTAssertEqual(controller.remainingCombos, 3)
+        XCTAssertEqual(controller.remainingCombos, 1)
         XCTAssertTrue(controller.needsAnotherCycle)
 
-        XCTAssertTrue(controller.recordDetectedGroups(1, controlled: true))
-        XCTAssertEqual(controller.controlledGeneratedCombos, 1)
-        XCTAssertEqual(controller.remainingCombos, 2)
-        XCTAssertTrue(controller.needsAnotherCycle)
-
-        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: true))
-        XCTAssertEqual(controller.generatedCombos, 5)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 3)
+        XCTAssertTrue(controller.recordDetectedGroups(1))
+        XCTAssertEqual(controller.generatedCombos, 3)
         XCTAssertEqual(controller.remainingCombos, 0)
         XCTAssertFalse(controller.needsAnotherCycle)
         XCTAssertTrue(controller.isComplete)
     }
 
-    func testCompletedControlledTargetAllowsNaturalSkyfallBeyondTarget() {
+    func testCompletedControlledTargetUsesSafeFinalizationBoundary() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 3)
 
-        XCTAssertTrue(controller.recordDetectedGroups(3, controlled: true))
+        XCTAssertTrue(controller.recordDetectedGroups(3))
         XCTAssertTrue(controller.isComplete)
         XCTAssertFalse(controller.needsAnotherCycle)
-
-        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
-        XCTAssertEqual(controller.controlledGeneratedCombos, 3)
-        XCTAssertEqual(controller.generatedCombos, 5)
+        XCTAssertEqual(controller.generatedCombos, 3)
         XCTAssertEqual(controller.remainingCombos, 0)
-        XCTAssertTrue(controller.isComplete)
     }
 
     func testSkyfallOffDoesNotPlanControlledGroupsButRecordsNaturalGroups() {
@@ -1273,9 +1427,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
             refillSlots: slots,
             using: &generator
         ))
-        XCTAssertTrue(controller.recordDetectedGroups(2, controlled: false))
+        XCTAssertTrue(controller.recordDetectedGroups(2))
         XCTAssertEqual(controller.generatedCombos, 2)
-        XCTAssertEqual(controller.controlledGeneratedCombos, 0)
     }
 
     func testEffectiveSkyfallZeroCannotFinishWhileNaturalMatchesRemain() {
