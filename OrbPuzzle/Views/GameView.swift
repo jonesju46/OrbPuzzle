@@ -26,7 +26,7 @@ struct GameView: View {
                 applySettings()
                 guard !isGameplayVisible else { return }
                 isGameplayVisible = true
-                scene.startNewGame()
+                scene.startNewGame(battleConfig: GameSettings.battleConfig())
             }
             .onChange(of: geometry.size) { _, newSize in
                 resizeScene(to: newSize)
@@ -96,7 +96,7 @@ struct GameView: View {
 
     private var newGameButton: some View {
         Button {
-            scene.startNewGame()
+            scene.startNewGame(battleConfig: GameSettings.battleConfig())
         } label: {
             Text("New Game")
                 .font(.subheadline.weight(.semibold))

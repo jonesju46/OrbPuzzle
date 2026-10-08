@@ -18,6 +18,318 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
+    func testBattleCardsKeepIndependentAttributeAttackAndHealConfig() {
+        let cards = [
+            CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 3),
+            CardConfig(attribute: .water, attack: 500, heartHealPercent: 5)
+        ]
+        let config = BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 2_000, baseCD: 3),
+            cards: cards
+        )
+
+        XCTAssertEqual(config.cards[0], cards[0])
+        XCTAssertEqual(config.cards[1], cards[1])
+        XCTAssertNotEqual(config.cards[0].attack, config.cards[1].attack)
+        XCTAssertNotEqual(config.cards[0].heartHealPercent, config.cards[1].heartHealPercent)
+    }
+
+    func testBattleMVPDefaultsAndRanges() {
+        let config = BattleConfig.default
+
+        XCTAssertEqual(config.playerMaxHP, 10_000)
+        XCTAssertEqual(config.monster, MonsterConfig(maxHP: 10_000, attack: 2_000, baseCD: 3))
+        XCTAssertEqual(config.cards.map(\.attribute), [.water, .fire, .wood, .light, .dark])
+        XCTAssertEqual(config.cards.map(\.attack), Array(repeating: 1_000, count: 5))
+        XCTAssertEqual(config.cards.map(\.heartHealPercent), Array(repeating: 2.0, count: 5))
+        XCTAssertEqual(GameSettings.battleHPRange, 1...9_999_999)
+        XCTAssertEqual(GameSettings.monsterCDRange, 1...99)
+        XCTAssertEqual(GameSettings.battleAttackRange, 0...999_999)
+        XCTAssertEqual(GameSettings.heartHealPercentRange, 0.0...100.0)
+        XCTAssertFalse(GameSettings.battleCardAttributes.contains(.heart))
+    }
+
+    func testDuplicateAttributeCardsAttackIndependently() {
+        let cards = [
+            CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 0),
+            CardConfig(attribute: .water, attack: 500, heartHealPercent: 0),
+            CardConfig(attribute: .fire, attack: 0, heartHealPercent: 0),
+            CardConfig(attribute: .wood, attack: 0, heartHealPercent: 0),
+            CardConfig(attribute: .light, attack: 0, heartHealPercent: 0)
+        ]
+        var session = BattleSession(config: BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 0, baseCD: 3),
+            cards: cards
+        ))
+
+        let result = session.resolveTurn(comboByType: [.water: 3])
+
+        XCTAssertEqual(result.cardDamages[0], 3_000)
+        XCTAssertEqual(result.cardDamages[1], 1_500)
+        XCTAssertEqual(result.totalMonsterDamage, 4_500)
+        XCTAssertEqual(session.state.monsterCurrentHP, 5_500)
+    }
+
+    func testFiveCardsUseTheirOwnAttributeAndAttack() {
+        let cards = [
+            CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 0),
+            CardConfig(attribute: .fire, attack: 800, heartHealPercent: 0),
+            CardConfig(attribute: .wood, attack: 900, heartHealPercent: 0),
+            CardConfig(attribute: .light, attack: 1_200, heartHealPercent: 0),
+            CardConfig(attribute: .dark, attack: 1_100, heartHealPercent: 0)
+        ]
+        var session = BattleSession(config: BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 0, baseCD: 3),
+            cards: cards
+        ))
+
+        let result = session.resolveTurn(comboByType: [
+            .water: 2, .fire: 1, .wood: 0, .light: 2, .dark: 1
+        ])
+
+        XCTAssertEqual(result.cardDamages, [2_000, 800, 0, 2_400, 1_100])
+        XCTAssertEqual(result.totalMonsterDamage, 6_300)
+        XCTAssertEqual(session.state.monsterCurrentHP, 3_700)
+    }
+
+    func testFiveCardsHealIndividuallyAndZeroPercentContributesZero() {
+        let cards = zip(
+            GameSettings.battleCardAttributes,
+            [3.0, 5.0, 0.0, 6.0, 2.0]
+        ).map { CardConfig(attribute: $0.0, attack: 0, heartHealPercent: $0.1) }
+        var session = BattleSession(
+            config: BattleConfig(
+                playerMaxHP: 10_000,
+                monster: MonsterConfig(maxHP: 10_000, attack: 0, baseCD: 99),
+                cards: cards
+            ),
+            playerCurrentHP: 1_000
+        )
+
+        let result = session.resolveTurn(comboByType: [.heart: 2])
+
+        XCTAssertEqual(result.cardHealContributions, [600, 1_000, 0, 1_200, 400])
+        XCTAssertEqual(result.totalCalculatedHeal, 3_200)
+        XCTAssertEqual(result.appliedHeal, 3_200)
+        XCTAssertEqual(session.state.playerCurrentHP, 4_200)
+        XCTAssertEqual(cards[2].healContribution(playerMaxHP: 10_000, heartComboCount: 5), 0)
+    }
+
+    func testHeartHealUsesAllCardsRegardlessOfAttributeAndCapsAtMaxHP() {
+        let cards = [
+            CardConfig(attribute: .water, attack: 0, heartHealPercent: 3),
+            CardConfig(attribute: .fire, attack: 0, heartHealPercent: 5),
+            CardConfig(attribute: .wood, attack: 0, heartHealPercent: 4),
+            CardConfig(attribute: .light, attack: 0, heartHealPercent: 6),
+            CardConfig(attribute: .dark, attack: 0, heartHealPercent: 2)
+        ]
+        var session = BattleSession(
+            config: BattleConfig(
+                playerMaxHP: 10_000,
+                monster: MonsterConfig(maxHP: 10_000, attack: 0, baseCD: 99),
+                cards: cards
+            ),
+            playerCurrentHP: 9_500
+        )
+
+        let result = session.resolveTurn(comboByType: [.heart: 2])
+
+        XCTAssertEqual(result.cardHealContributions, [600, 1_000, 800, 1_200, 400])
+        XCTAssertEqual(result.totalCalculatedHeal, 4_000)
+        XCTAssertEqual(result.appliedHeal, 500)
+        XCTAssertEqual(session.state.playerCurrentHP, 10_000)
+    }
+
+    func testBattlePlayerConfigInitializesCurrentHP() {
+        let session = BattleSession(config: BattleConfig(
+            playerMaxHP: 25_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 2_000, baseCD: 3),
+            cards: BattleConfig.defaultCards
+        ))
+
+        XCTAssertEqual(session.state.playerMaxHP, 25_000)
+        XCTAssertEqual(session.state.playerCurrentHP, 25_000)
+    }
+
+    func testMonsterCDDecrementsOncePerTurnAttacksAndResets() {
+        var session = BattleSession(config: BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 2_000, baseCD: 3),
+            cards: BattleConfig.defaultCards.map {
+                CardConfig(attribute: $0.attribute, attack: 0, heartHealPercent: 0)
+            }
+        ))
+
+        XCTAssertFalse(session.resolveTurn(comboByType: [:]).monsterDidAttack)
+        XCTAssertEqual(session.state.monsterCurrentCD, 2)
+        XCTAssertFalse(session.resolveTurn(comboByType: [:]).monsterDidAttack)
+        XCTAssertEqual(session.state.monsterCurrentCD, 1)
+        let third = session.resolveTurn(comboByType: [:])
+        XCTAssertTrue(third.monsterDidAttack)
+        XCTAssertEqual(third.monsterAttackDamage, 2_000)
+        XCTAssertEqual(session.state.monsterCurrentCD, 3)
+        XCTAssertEqual(session.state.playerCurrentHP, 8_000)
+    }
+
+    func testDefeatedMonsterDoesNotReduceCDOrCounterattack() {
+        var session = BattleSession(config: BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 1_000, attack: 9_000, baseCD: 1),
+            cards: [
+                CardConfig(attribute: .water, attack: 1_500, heartHealPercent: 0),
+                CardConfig(attribute: .fire, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .wood, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .light, attack: 0, heartHealPercent: 0),
+                CardConfig(attribute: .dark, attack: 0, heartHealPercent: 0)
+            ]
+        ))
+
+        let result = session.resolveTurn(comboByType: [.water: 1])
+
+        XCTAssertEqual(session.state.monsterCurrentHP, 0)
+        XCTAssertEqual(session.state.monsterCurrentCD, 1)
+        XCTAssertEqual(session.state.outcome, .defeated)
+        XCTAssertFalse(result.monsterDidAttack)
+        XCTAssertEqual(session.state.playerCurrentHP, 10_000)
+        XCTAssertFalse(session.state.canAcceptInput)
+    }
+
+    func testMonsterAttackCanCauseGameOverAndDisableInput() {
+        var session = BattleSession(
+            config: BattleConfig(
+                playerMaxHP: 10_000,
+                monster: MonsterConfig(maxHP: 10_000, attack: 5_000, baseCD: 1),
+                cards: BattleConfig.defaultCards.map {
+                    CardConfig(attribute: $0.attribute, attack: 0, heartHealPercent: 0)
+                }
+            ),
+            playerCurrentHP: 2_000
+        )
+
+        let result = session.resolveTurn(comboByType: [:])
+
+        XCTAssertTrue(result.monsterDidAttack)
+        XCTAssertEqual(session.state.playerCurrentHP, 0)
+        XCTAssertEqual(session.state.outcome, .gameOver)
+        XCTAssertFalse(session.state.canAcceptInput)
+        XCTAssertEqual(session.state.monsterCurrentCD, 1)
+    }
+
+    func testHeartHealIsAppliedBeforeMonsterAttack() {
+        var session = BattleSession(
+            config: BattleConfig(
+                playerMaxHP: 10_000,
+                monster: MonsterConfig(maxHP: 10_000, attack: 3_000, baseCD: 1),
+                cards: BattleConfig.defaultCards.map {
+                    CardConfig(attribute: $0.attribute, attack: 0, heartHealPercent: 2)
+                }
+            ),
+            playerCurrentHP: 2_000
+        )
+
+        let result = session.resolveTurn(comboByType: [.heart: 2])
+
+        XCTAssertEqual(result.totalCalculatedHeal, 2_000)
+        XCTAssertEqual(result.appliedHeal, 2_000)
+        XCTAssertEqual(result.monsterAttackDamage, 3_000)
+        XCTAssertEqual(session.state.playerCurrentHP, 1_000)
+    }
+
+    func testBattleSessionFreezesConfigUntilNextNewSession() {
+        var initialCards = BattleConfig.defaultCards
+        initialCards[0] = CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 2)
+        let initialConfig = BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 20_000, attack: 0, baseCD: 3),
+            cards: initialCards
+        )
+        let currentSession = BattleSession(config: initialConfig)
+
+        var changedCards = initialCards
+        changedCards[0] = CardConfig(attribute: .water, attack: 5_000, heartHealPercent: 9)
+        let changedConfig = BattleConfig(
+            playerMaxHP: 20_000,
+            monster: MonsterConfig(maxHP: 30_000, attack: 3_000, baseCD: 5),
+            cards: changedCards
+        )
+
+        XCTAssertEqual(currentSession.config.cards[0].attack, 1_000)
+        XCTAssertEqual(currentSession.config.playerMaxHP, 10_000)
+        let nextSession = BattleSession(config: changedConfig)
+        XCTAssertEqual(nextSession.config.cards[0].attack, 5_000)
+        XCTAssertEqual(nextSession.config.playerMaxHP, 20_000)
+    }
+
+    func testGameSceneAppliesBattleSettingsOnlyWhenNewGameStarts() {
+        let scene = GameScene(size: CGSize(width: 390, height: 844))
+        var firstCards = BattleConfig.defaultCards
+        firstCards[0] = CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 2)
+        let first = BattleConfig(
+            playerMaxHP: 10_000,
+            monster: MonsterConfig(maxHP: 10_000, attack: 2_000, baseCD: 3),
+            cards: firstCards
+        )
+        scene.startNewGame(battleConfig: first)
+
+        var changedCards = firstCards
+        changedCards[0] = CardConfig(attribute: .water, attack: 5_000, heartHealPercent: 8)
+        let changed = BattleConfig(
+            playerMaxHP: 25_000,
+            monster: MonsterConfig(maxHP: 30_000, attack: 4_000, baseCD: 5),
+            cards: changedCards
+        )
+
+        XCTAssertEqual(scene.battleConfigSnapshot, first)
+        XCTAssertEqual(scene.battleStateSnapshot.playerCurrentHP, 10_000)
+        scene.startNewGame(battleConfig: changed)
+        XCTAssertEqual(scene.battleConfigSnapshot, changed)
+        XCTAssertEqual(scene.battleStateSnapshot.playerCurrentHP, 25_000)
+        XCTAssertEqual(scene.battleStateSnapshot.monsterCurrentHP, 30_000)
+        XCTAssertEqual(scene.battleStateSnapshot.monsterCurrentCD, 5)
+    }
+
+    func testBattleSettingsPersistEveryCardFieldIndependently() {
+        let suiteName = "OrbPuzzleTests.BattleSettings.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Expected isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(25_000, forKey: GameSettings.playerMaxHPKey)
+        defaults.set(50_000, forKey: GameSettings.monsterHPKey)
+        defaults.set(4, forKey: GameSettings.monsterCDKey)
+        defaults.set(3_000, forKey: GameSettings.monsterATKKey)
+        defaults.set(OrbType.water.rawValue, forKey: GameSettings.card1AttributeKey)
+        defaults.set(1_000, forKey: GameSettings.card1ATKKey)
+        defaults.set(3, forKey: GameSettings.card1HeartHealKey)
+        defaults.set(OrbType.water.rawValue, forKey: GameSettings.card2AttributeKey)
+        defaults.set(500, forKey: GameSettings.card2ATKKey)
+        defaults.set(5, forKey: GameSettings.card2HeartHealKey)
+        defaults.set(OrbType.wood.rawValue, forKey: GameSettings.card3AttributeKey)
+        defaults.set(700, forKey: GameSettings.card3ATKKey)
+        defaults.set(4, forKey: GameSettings.card3HeartHealKey)
+        defaults.set(OrbType.light.rawValue, forKey: GameSettings.card4AttributeKey)
+        defaults.set(1_200, forKey: GameSettings.card4ATKKey)
+        defaults.set(6, forKey: GameSettings.card4HeartHealKey)
+        defaults.set(OrbType.dark.rawValue, forKey: GameSettings.card5AttributeKey)
+        defaults.set(1_100, forKey: GameSettings.card5ATKKey)
+        defaults.set(2, forKey: GameSettings.card5HeartHealKey)
+
+        let config = GameSettings.battleConfig(defaults: defaults)
+
+        XCTAssertEqual(config.playerMaxHP, 25_000)
+        XCTAssertEqual(config.monster, MonsterConfig(maxHP: 50_000, attack: 3_000, baseCD: 4))
+        XCTAssertEqual(config.cards[0], CardConfig(attribute: .water, attack: 1_000, heartHealPercent: 3))
+        XCTAssertEqual(config.cards[1], CardConfig(attribute: .water, attack: 500, heartHealPercent: 5))
+        XCTAssertEqual(config.cards[2], CardConfig(attribute: .wood, attack: 700, heartHealPercent: 4))
+        XCTAssertEqual(config.cards[3], CardConfig(attribute: .light, attack: 1_200, heartHealPercent: 6))
+        XCTAssertEqual(config.cards[4], CardConfig(attribute: .dark, attack: 1_100, heartHealPercent: 2))
+        XCTAssertEqual(config.cards.count, 5)
+    }
+
     func testComboSoundIndexLoopsEverySevenCombos() {
         let expected: [Int: Int] = [
             1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,

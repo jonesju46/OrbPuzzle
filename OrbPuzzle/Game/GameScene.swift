@@ -9,6 +9,7 @@ final class GameScene: SKScene {
     private let comboController = ComboController()
     private let skyfallController = SkyfallController()
     private var sessionStatistics = SessionStatistics()
+    private var battleSession = BattleSession(config: .default)
     private lazy var turnController = TurnController(duration: GameSettings.effectiveTurnDuration(
         enabled: GameSettings.defaultTurnTimeEnabled,
         configured: GameSettings.defaultTurnDuration
@@ -20,6 +21,27 @@ final class GameScene: SKScene {
     private let timerLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
     private let timerTrack = SKShapeNode()
     private let timerFill = SKSpriteNode(color: .systemGreen, size: .zero)
+    private let monsterArea = SKShapeNode()
+    private let monsterPlaceholder = SKShapeNode()
+    private let monsterPlaceholderLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private let monsterTitleLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private let monsterHPLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let monsterCDLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let battleStatusLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private let monsterHPTrack = SKShapeNode()
+    private let monsterHPFill = SKSpriteNode(color: .systemRed, size: .zero)
+    private let playerHPLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let playerHPTrack = SKShapeNode()
+    private let playerHPFill = SKSpriteNode(color: .systemGreen, size: .zero)
+    private let monsterDamageLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private let playerFeedbackLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
+    private var cardNodes: [SKShapeNode] = []
+    private var cardAttributeLabels: [SKLabelNode] = []
+    private var cardAttackLabels: [SKLabelNode] = []
+    private var cardHealLabels: [SKLabelNode] = []
+    private var cardDamageLabels: [SKLabelNode] = []
+    private var monsterHPBarFrame = CGRect.zero
+    private var playerHPBarFrame = CGRect.zero
     private var orbNodes: [UUID: OrbNode] = [:]
     private var debugLabels: [SKLabelNode] = []
     private var orbTypeDebugLabels: [SKLabelNode] = []
@@ -84,8 +106,11 @@ final class GameScene: SKScene {
         )
     }
 
+    var battleStateSnapshot: BattleState { battleSession.state }
+    var battleConfigSnapshot: BattleConfig { battleSession.config }
+
     /// Starts a genuinely new session even when SwiftUI retains this scene.
-    func startNewGame() {
+    func startNewGame(battleConfig: BattleConfig = .default) {
         let oldOrbIDs = sessionSnapshot.orbIDs
         gameSessionFence.beginNewSession()
 
@@ -99,6 +124,9 @@ final class GameScene: SKScene {
         timerLabel.removeAllActions()
         timerTrack.removeAllActions()
         timerFill.removeAllActions()
+        monsterDamageLabel.removeAllActions()
+        playerFeedbackLabel.removeAllActions()
+        for label in cardDamageLabels { label.removeAllActions() }
         for node in orbNodes.values {
             node.removeAllActions()
             node.removeFromParent()
@@ -110,15 +138,22 @@ final class GameScene: SKScene {
         comboController.reset()
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
         sessionStatistics.reset()
+        battleSession = BattleSession(config: battleConfig)
         turnController.resetSession()
         comboLabel.text = "Combo 0"
         comboLabel.alpha = 1
         comboLabel.setScale(1)
+        monsterDamageLabel.text = nil
+        monsterDamageLabel.alpha = 0
+        playerFeedbackLabel.text = nil
+        playerFeedbackLabel.alpha = 0
 
         grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
         layoutAllOrbs(rebuild: true)
         gameState = .idle
         updateTimerUI()
+        updateBattleUI()
+        updateCardUI()
         updateDebugOverlay()
 
 #if DEBUG
@@ -168,6 +203,8 @@ final class GameScene: SKScene {
         timerFill.zPosition = 1
         addChild(timerFill)
 
+        setupBattleInterface()
+
 #if DEBUG
         for _ in 0..<6 {
             let label = SKLabelNode(fontNamed: "Menlo")
@@ -190,6 +227,104 @@ final class GameScene: SKScene {
 #endif
         layoutInterface()
         updateTimerUI()
+        updateCardUI()
+    }
+
+    private func setupBattleInterface() {
+        monsterArea.fillColor = SKColor.white.withAlphaComponent(0.055)
+        monsterArea.strokeColor = SKColor.white.withAlphaComponent(0.16)
+        monsterArea.lineWidth = 1
+        monsterArea.zPosition = 1
+        addChild(monsterArea)
+
+        monsterPlaceholder.fillColor = SKColor.systemIndigo.withAlphaComponent(0.85)
+        monsterPlaceholder.strokeColor = SKColor.white.withAlphaComponent(0.55)
+        monsterPlaceholder.lineWidth = 1.5
+        monsterPlaceholder.zPosition = 2
+        addChild(monsterPlaceholder)
+
+        monsterPlaceholderLabel.text = "M"
+        monsterPlaceholderLabel.fontSize = 18
+        monsterPlaceholderLabel.verticalAlignmentMode = .center
+        monsterPlaceholderLabel.zPosition = 3
+        addChild(monsterPlaceholderLabel)
+
+        for label in [monsterTitleLabel, monsterHPLabel, monsterCDLabel, battleStatusLabel, playerHPLabel] {
+            label.horizontalAlignmentMode = .left
+            label.verticalAlignmentMode = .center
+            label.fontColor = .white
+            label.zPosition = 3
+            addChild(label)
+        }
+        monsterTitleLabel.fontSize = 13
+        monsterHPLabel.fontSize = 10
+        monsterCDLabel.fontSize = 11
+        monsterCDLabel.horizontalAlignmentMode = .right
+        battleStatusLabel.fontSize = 11
+        battleStatusLabel.horizontalAlignmentMode = .center
+        playerHPLabel.fontSize = 11
+
+        for track in [monsterHPTrack, playerHPTrack] {
+            track.fillColor = SKColor.white.withAlphaComponent(0.16)
+            track.strokeColor = .clear
+            track.zPosition = 2
+            addChild(track)
+        }
+        for fill in [monsterHPFill, playerHPFill] {
+            fill.anchorPoint = CGPoint(x: 0, y: 0.5)
+            fill.zPosition = 3
+            addChild(fill)
+        }
+
+        monsterDamageLabel.fontSize = 15
+        monsterDamageLabel.fontColor = .systemYellow
+        monsterDamageLabel.horizontalAlignmentMode = .center
+        monsterDamageLabel.zPosition = 20
+        addChild(monsterDamageLabel)
+        playerFeedbackLabel.fontSize = 12
+        playerFeedbackLabel.horizontalAlignmentMode = .right
+        playerFeedbackLabel.zPosition = 20
+        addChild(playerFeedbackLabel)
+
+        for _ in 0..<BattleConfig.cardCount {
+            let card = SKShapeNode()
+            card.strokeColor = SKColor.white.withAlphaComponent(0.35)
+            card.lineWidth = 1
+            card.zPosition = 2
+            addChild(card)
+            cardNodes.append(card)
+
+            let attribute = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            attribute.fontSize = 12
+            attribute.verticalAlignmentMode = .center
+            attribute.zPosition = 3
+            card.addChild(attribute)
+            cardAttributeLabels.append(attribute)
+
+            let attack = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+            attack.fontSize = 8.5
+            attack.fontColor = .white
+            attack.verticalAlignmentMode = .center
+            attack.zPosition = 3
+            card.addChild(attack)
+            cardAttackLabels.append(attack)
+
+            let heal = SKLabelNode(fontNamed: "AvenirNext-Regular")
+            heal.fontSize = 7.5
+            heal.fontColor = SKColor.white.withAlphaComponent(0.8)
+            heal.verticalAlignmentMode = .center
+            heal.zPosition = 3
+            card.addChild(heal)
+            cardHealLabels.append(heal)
+
+            let damage = SKLabelNode(fontNamed: "AvenirNext-Bold")
+            damage.fontSize = 8
+            damage.fontColor = .systemYellow
+            damage.verticalAlignmentMode = .center
+            damage.zPosition = 4
+            card.addChild(damage)
+            cardDamageLabels.append(damage)
+        }
     }
 
     private func layoutInterface() {
@@ -202,13 +337,21 @@ final class GameScene: SKScene {
         cellSize = CGSize(width: calculatedCell, height: calculatedCell)
         boardBackground.path = CGPath(roundedRect: boardFrame.insetBy(dx: -5, dy: -5), cornerWidth: 14, cornerHeight: 14, transform: nil)
 
-        let headerY = min(size.height - 44, boardFrame.maxY + 72)
+        let cardCenterY = boardFrame.maxY + 27
+        let trackFrame = CGRect(
+            x: horizontalMargin,
+            y: cardCenterY + 27,
+            width: boardWidth,
+            height: 10
+        )
+        let headerY = trackFrame.maxY + 22
         comboLabel.position = CGPoint(x: horizontalMargin, y: headerY)
         timerLabel.position = CGPoint(x: size.width - horizontalMargin, y: headerY)
-        let trackFrame = CGRect(x: horizontalMargin, y: headerY - 34, width: boardWidth, height: 12)
         timerTrack.path = CGPath(roundedRect: trackFrame, cornerWidth: 6, cornerHeight: 6, transform: nil)
         timerFill.position = CGPoint(x: trackFrame.minX, y: trackFrame.midY)
         timerFill.size = CGSize(width: trackFrame.width, height: 8)
+
+        layoutBattleInterface(horizontalMargin: horizontalMargin, boardWidth: boardWidth)
 
 #if DEBUG
         for (index, label) in debugLabels.enumerated() {
@@ -221,6 +364,174 @@ final class GameScene: SKScene {
             label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - 18 - CGFloat(index) * 12)
         }
 #endif
+    }
+
+    private func layoutBattleInterface(horizontalMargin: CGFloat, boardWidth: CGFloat) {
+        let cardCenterY = boardFrame.maxY + 27
+        let cardGap: CGFloat = 4
+        let cardWidth = (boardWidth - cardGap * CGFloat(BattleConfig.cardCount - 1))
+            / CGFloat(BattleConfig.cardCount)
+        let cardHeight: CGFloat = 44
+        for index in 0..<min(cardNodes.count, BattleConfig.cardCount) {
+            let centerX = horizontalMargin + cardWidth / 2 + CGFloat(index) * (cardWidth + cardGap)
+            cardNodes[index].path = CGPath(
+                roundedRect: CGRect(x: -cardWidth / 2, y: -cardHeight / 2, width: cardWidth, height: cardHeight),
+                cornerWidth: 8,
+                cornerHeight: 8,
+                transform: nil
+            )
+            cardNodes[index].position = CGPoint(x: centerX, y: cardCenterY)
+            cardAttributeLabels[index].position = CGPoint(x: 0, y: 10)
+            cardAttackLabels[index].position = CGPoint(x: 0, y: -3)
+            cardHealLabels[index].position = CGPoint(x: 0, y: -14)
+            cardDamageLabels[index].position = CGPoint(x: 0, y: 18)
+        }
+
+        let headerY = cardCenterY + 59
+        let playerLabelY = headerY + 31
+        playerHPLabel.position = CGPoint(x: horizontalMargin, y: playerLabelY)
+        playerFeedbackLabel.position = CGPoint(x: horizontalMargin + boardWidth, y: playerLabelY)
+        playerHPBarFrame = CGRect(
+            x: horizontalMargin,
+            y: playerLabelY - 17,
+            width: boardWidth,
+            height: 7
+        )
+        playerHPTrack.path = CGPath(
+            roundedRect: playerHPBarFrame,
+            cornerWidth: 3.5,
+            cornerHeight: 3.5,
+            transform: nil
+        )
+        playerHPFill.position = CGPoint(x: playerHPBarFrame.minX, y: playerHPBarFrame.midY)
+
+        let monsterCenterY = min(size.height - 24, playerLabelY + 46)
+        let monsterFrame = CGRect(
+            x: horizontalMargin,
+            y: monsterCenterY - 19,
+            width: boardWidth,
+            height: 40
+        )
+        monsterArea.path = CGPath(
+            roundedRect: monsterFrame,
+            cornerWidth: 10,
+            cornerHeight: 10,
+            transform: nil
+        )
+        let placeholderCenter = CGPoint(x: monsterFrame.minX + 22, y: monsterFrame.midY)
+        monsterPlaceholder.path = CGPath(
+            ellipseIn: CGRect(x: -16, y: -16, width: 32, height: 32),
+            transform: nil
+        )
+        monsterPlaceholder.position = placeholderCenter
+        monsterPlaceholderLabel.position = placeholderCenter
+        monsterTitleLabel.position = CGPoint(x: monsterFrame.minX + 45, y: monsterCenterY + 9)
+        monsterHPLabel.position = CGPoint(x: monsterFrame.minX + 45, y: monsterCenterY - 5)
+        monsterCDLabel.position = CGPoint(x: monsterFrame.maxX - 8, y: monsterCenterY + 9)
+        battleStatusLabel.position = CGPoint(x: monsterFrame.midX + 36, y: monsterCenterY + 9)
+        monsterHPBarFrame = CGRect(
+            x: monsterFrame.minX + 45,
+            y: monsterCenterY - 16,
+            width: max(20, monsterFrame.width - 55),
+            height: 5
+        )
+        monsterHPTrack.path = CGPath(
+            roundedRect: monsterHPBarFrame,
+            cornerWidth: 2.5,
+            cornerHeight: 2.5,
+            transform: nil
+        )
+        monsterHPFill.position = CGPoint(x: monsterHPBarFrame.minX, y: monsterHPBarFrame.midY)
+        monsterDamageLabel.position = CGPoint(x: monsterFrame.midX, y: monsterFrame.maxY + 4)
+        updateBattleUI()
+    }
+
+    private func updateCardUI() {
+        let cards = battleSession.config.cards
+        guard cards.count == BattleConfig.cardCount,
+              cardNodes.count == BattleConfig.cardCount else { return }
+        for (index, card) in cards.enumerated() {
+            cardNodes[index].fillColor = battleColor(for: card.attribute).withAlphaComponent(0.62)
+            cardAttributeLabels[index].text = card.attribute.hudDisplayName
+            cardAttackLabels[index].text = "ATK \(card.attack)"
+            cardHealLabels[index].text = "H \(Int(card.heartHealPercent))%"
+            cardDamageLabels[index].text = nil
+        }
+    }
+
+    private func updateBattleUI() {
+        let state = battleSession.state
+        monsterTitleLabel.text = "Monster"
+        monsterHPLabel.text = "HP \(state.monsterCurrentHP) / \(state.monsterMaxHP)"
+        monsterCDLabel.text = "CD \(state.monsterCurrentCD)"
+        playerHPLabel.text = "Player HP \(state.playerCurrentHP) / \(state.playerMaxHP)"
+        switch state.outcome {
+        case .active:
+            battleStatusLabel.text = nil
+        case .defeated:
+            battleStatusLabel.text = "DEFEATED"
+            battleStatusLabel.fontColor = .systemYellow
+        case .gameOver:
+            battleStatusLabel.text = "GAME OVER"
+            battleStatusLabel.fontColor = .systemRed
+        }
+
+        let monsterRatio = state.monsterMaxHP > 0
+            ? CGFloat(state.monsterCurrentHP) / CGFloat(state.monsterMaxHP)
+            : 0
+        monsterHPFill.size = CGSize(
+            width: monsterHPBarFrame.width * min(max(monsterRatio, 0), 1),
+            height: monsterHPBarFrame.height
+        )
+        let playerRatio = state.playerMaxHP > 0
+            ? CGFloat(state.playerCurrentHP) / CGFloat(state.playerMaxHP)
+            : 0
+        playerHPFill.size = CGSize(
+            width: playerHPBarFrame.width * min(max(playerRatio, 0), 1),
+            height: playerHPBarFrame.height
+        )
+    }
+
+    private func showBattleFeedback(_ result: BattleTurnResult) {
+        for (index, damage) in result.cardDamages.enumerated()
+        where cardDamageLabels.indices.contains(index) {
+            animateBattleFeedback(cardDamageLabels[index], text: damage > 0 ? "DMG \(damage)" : nil)
+        }
+        animateBattleFeedback(
+            monsterDamageLabel,
+            text: result.appliedMonsterDamage > 0 ? "-\(result.appliedMonsterDamage)" : nil
+        )
+
+        var playerParts: [String] = []
+        if result.appliedHeal > 0 { playerParts.append("+\(result.appliedHeal)") }
+        if result.monsterAttackDamage > 0 { playerParts.append("-\(result.monsterAttackDamage)") }
+        playerFeedbackLabel.fontColor = result.monsterAttackDamage > 0 ? .systemRed : .systemGreen
+        animateBattleFeedback(
+            playerFeedbackLabel,
+            text: playerParts.isEmpty ? nil : playerParts.joined(separator: "  ")
+        )
+    }
+
+    private func animateBattleFeedback(_ label: SKLabelNode, text: String?) {
+        label.removeAllActions()
+        label.text = text
+        label.alpha = text == nil ? 0 : 1
+        guard text != nil else { return }
+        label.run(.sequence([
+            .wait(forDuration: 0.8),
+            .fadeOut(withDuration: 0.35)
+        ]))
+    }
+
+    private func battleColor(for type: OrbType) -> SKColor {
+        switch type {
+        case .fire: return SKColor(red: 0.94, green: 0.23, blue: 0.18, alpha: 1)
+        case .water: return SKColor(red: 0.15, green: 0.54, blue: 0.96, alpha: 1)
+        case .wood: return SKColor(red: 0.19, green: 0.76, blue: 0.35, alpha: 1)
+        case .light: return SKColor(red: 0.98, green: 0.79, blue: 0.16, alpha: 1)
+        case .dark: return SKColor(red: 0.46, green: 0.24, blue: 0.72, alpha: 1)
+        case .heart: return SKColor(red: 0.96, green: 0.35, blue: 0.67, alpha: 1)
+        }
     }
 
     private func layoutAllOrbs(rebuild: Bool = false) {
@@ -263,7 +574,9 @@ final class GameScene: SKScene {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard gameState == .idle || gameState == .turnActive, let touch = touches.first else { return }
+        guard battleSession.state.canAcceptInput,
+              gameState == .idle || gameState == .turnActive,
+              let touch = touches.first else { return }
         let location = touch.location(in: self)
         guard let position = gridPosition(at: location), let orb = grid.orb(at: position), let node = orbNodes[orb.id] else { return }
         gameState = .selected
@@ -727,6 +1040,11 @@ final class GameScene: SKScene {
             return
         }
         if let finalTurnMoveTime = turnController.lastCompletedTurnTime {
+            let battleResult = battleSession.resolveTurn(
+                comboByType: comboController.comboTotalByType
+            )
+            updateBattleUI()
+            showBattleFeedback(battleResult)
             sessionStatistics.commitCompletedTurn(
                 resolveID: resolveID,
                 moveTime: finalTurnMoveTime,
