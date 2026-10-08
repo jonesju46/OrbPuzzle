@@ -7,6 +7,8 @@ final class TurnController {
     private(set) var previousTouchPosition: CGPoint?
     private(set) var turnStartTime: TimeInterval?
     private(set) var remainingTime: TimeInterval
+    private(set) var elapsedTurnTime: TimeInterval = 0
+    private(set) var lastCompletedTurnTime: TimeInterval?
 
     var duration: TimeInterval {
         didSet {
@@ -18,6 +20,9 @@ final class TurnController {
     var isTiming: Bool { turnStartTime != nil }
     var hasActiveGesture: Bool { selectedOrbID != nil }
     var progress: Double { duration > 0 ? min(max(remainingTime / duration, 0), 1) : 0 }
+    var displayedElapsedTurnTime: TimeInterval {
+        isTiming ? elapsedTurnTime : (lastCompletedTurnTime ?? 0)
+    }
 
     init(duration: TimeInterval) {
         self.duration = min(max(duration, GameSettings.turnDurationRange.lowerBound), GameSettings.turnDurationRange.upperBound)
@@ -37,12 +42,15 @@ final class TurnController {
         guard turnStartTime == nil else { return }
         turnStartTime = currentTime
         remainingTime = duration
+        elapsedTurnTime = 0
+        lastCompletedTurnTime = nil
     }
 
     @discardableResult
     func update(at currentTime: TimeInterval) -> Bool {
         guard let turnStartTime else { return false }
         remainingTime = max(0, duration - (currentTime - turnStartTime))
+        elapsedTurnTime = min(max(duration - remainingTime, 0), duration)
         return remainingTime <= 0
     }
 
@@ -61,18 +69,41 @@ final class TurnController {
         previousTouchPosition = nil
     }
 
+    /// Stops a player-ended turn while preserving both its remaining and elapsed time.
+    func completeSession() {
+        guard turnStartTime != nil else {
+            endGesture()
+            return
+        }
+        lastCompletedTurnTime = elapsedTurnTime
+        endGesture()
+        turnStartTime = nil
+    }
+
     /// Locks an expired session at zero while match resolution is running.
     func expireSession() {
         endGesture()
         turnStartTime = nil
         remainingTime = 0
+        elapsedTurnTime = duration
+        lastCompletedTurnTime = duration
     }
 
-    /// Prepares a fresh session after resolution has fully completed.
+    /// Prepares the next turn without erasing the completed turn's HUD result.
+    func prepareNextSession() {
+        endGesture()
+        turnStartTime = nil
+        remainingTime = duration
+        elapsedTurnTime = 0
+    }
+
+    /// Clears all transient timing state for a genuinely new game.
     func resetSession() {
         endGesture()
         turnStartTime = nil
         remainingTime = duration
+        elapsedTurnTime = 0
+        lastCompletedTurnTime = nil
     }
 
     static func gridPosition(

@@ -310,11 +310,11 @@ final class GameScene: SKScene {
         } else if !turnController.isTiming {
             gameState = .idle
         } else {
-            expireTurnSession()
+            finishTurnSession(timerExpired: false)
         }
     }
 
-    private func expireTurnSession() {
+    private func finishTurnSession(timerExpired: Bool) {
         guard !forcedEndInProgress else { return }
         forcedEndInProgress = true
         gameState = .resolving
@@ -326,8 +326,13 @@ final class GameScene: SKScene {
             node.position = point(for: position)
             node.setScale(1)
         }
-        turnController.expireSession()
+        if timerExpired {
+            turnController.expireSession()
+        } else {
+            turnController.completeSession()
+        }
         updateTimerUI()
+        updateDebugOverlay()
         resolveTurn()
     }
 
@@ -623,7 +628,7 @@ final class GameScene: SKScene {
         validateFinalBoard()
 #endif
         forcedEndInProgress = false
-        turnController.resetSession()
+        turnController.prepareNextSession()
         gameState = .completed
         updateTimerUI()
 #if DEBUG
@@ -697,7 +702,7 @@ final class GameScene: SKScene {
 #endif
         lastUpdateTime = currentTime
         if turnController.isTiming, turnController.update(at: currentTime) {
-            expireTurnSession()
+            finishTurnSession(timerExpired: true)
         }
         updateTimerUI()
         updateDebugOverlay()
@@ -717,7 +722,7 @@ final class GameScene: SKScene {
         guard debugLabels.count == 6 else { return }
         debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
         debugLabels[1].text = "State \(gameState.rawValue)"
-        debugLabels[2].text = String(format: "Time %.1f", turnController.remainingTime)
+        debugLabels[2].text = String(format: "Time %.1f", turnController.displayedElapsedTurnTime)
         debugLabels[3].text = "Combo \(comboController.comboCount)"
         debugLabels[4].text = "Skyfall \(skyfallController.generatedCombos)/\(requestedSkyfallCombos)"
         debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"

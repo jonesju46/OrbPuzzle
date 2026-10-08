@@ -375,6 +375,103 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(timer.remainingTime, 10)
     }
 
+    func testElapsedTimeIsConfiguredDurationMinusRemainingTime() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+
+        XCTAssertFalse(timer.update(at: 104.6))
+
+        XCTAssertEqual(timer.remainingTime, 25.4, accuracy: 0.001)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 4.6, accuracy: 0.001)
+    }
+
+    func testElapsedTimeShowsThreeSecondsWhenTwentySevenRemain() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+
+        XCTAssertFalse(timer.update(at: 103))
+
+        XCTAssertEqual(timer.remainingTime, 27, accuracy: 0.001)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 3, accuracy: 0.001)
+    }
+
+    func testFingerUpStoresCompletedElapsedTimeWithoutZeroingRemainingTime() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 104.6))
+
+        timer.completeSession()
+
+        XCTAssertFalse(timer.isTiming)
+        XCTAssertEqual(timer.remainingTime, 25.4, accuracy: 0.001)
+        XCTAssertEqual(timer.lastCompletedTurnTime ?? -1, 4.6, accuracy: 0.001)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 4.6, accuracy: 0.001)
+    }
+
+    func testCompletedElapsedTimeDoesNotAdvanceDuringResolve() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 104.6))
+        timer.completeSession()
+
+        XCTAssertFalse(timer.update(at: 500))
+
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 4.6, accuracy: 0.001)
+    }
+
+    func testExpiredTurnShowsFullConfiguredDurationDuringResolve() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertTrue(timer.update(at: 130))
+
+        timer.expireSession()
+
+        XCTAssertEqual(timer.remainingTime, 0, accuracy: 0.001)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 30, accuracy: 0.001)
+    }
+
+    func testPreparingNextIdleTurnPreservesLastCompletedTime() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 104.6))
+        timer.completeSession()
+
+        timer.prepareNextSession()
+
+        XCTAssertEqual(timer.remainingTime, 30, accuracy: 0.001)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 4.6, accuracy: 0.001)
+    }
+
+    func testNextValidMoveStartsFreshElapsedTimeButTouchAloneDoesNot() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 104.6))
+        timer.completeSession()
+        timer.prepareNextSession()
+
+        timer.select(orbID: UUID(), at: GridPosition(row: 0, column: 0), touchPosition: .zero)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 4.6, accuracy: 0.001)
+
+        timer.beginTiming(at: 200)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 0, accuracy: 0.001)
+        XCTAssertFalse(timer.update(at: 203))
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 3, accuracy: 0.001)
+    }
+
+    func testNewGameResetClearsElapsedTurnTime() {
+        let timer = TurnController(duration: 30)
+        timer.beginTiming(at: 100)
+        XCTAssertFalse(timer.update(at: 104.6))
+        timer.completeSession()
+
+        timer.resetSession()
+
+        XCTAssertEqual(timer.remainingTime, 30, accuracy: 0.001)
+        XCTAssertEqual(timer.elapsedTurnTime, 0, accuracy: 0.001)
+        XCTAssertNil(timer.lastCompletedTurnTime)
+        XCTAssertEqual(timer.displayedElapsedTurnTime, 0, accuracy: 0.001)
+    }
+
     func testEveryLeftAndRightEdgeOrbMapsInsideBoard() {
         let frame = CGRect(x: 14, y: 100, width: 600, height: 500)
         let cellWidth = frame.width / 6
