@@ -31,27 +31,19 @@ struct GameView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("OrbPuzzle")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button {
-                    scene.startNewGame()
-                } label: {
-                    Text("New Game")
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("New Game")
+            ToolbarItem(placement: .principal) {
+                Text("OrbPuzzle")
+                    .font(.headline)
+            }
 
-                Button {
-                    isShowingSettings = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .frame(width: 44, height: 44)
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack(spacing: 10) {
+                    newGameButton
+                    settingsButton
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Settings")
+                .fixedSize()
             }
         }
         .background(alignment: .topLeading) {
@@ -90,5 +82,42 @@ struct GameView: View {
             noResolveDuringTurn: noResolveDuringTurn,
             skyfallComboCount: skyfallComboCount
         )
+    }
+
+    private var newGameButton: some View {
+        Button {
+            scene.startNewGame()
+        } label: {
+            Text("New Game")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+                .background(Color(uiColor: .secondarySystemBackground), in: Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(Color(uiColor: .separator), lineWidth: 1)
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("New Game")
+    }
+
+    private var settingsButton: some View {
+        Button {
+            isShowingSettings = true
+        } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 17, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .background(Color(uiColor: .secondarySystemBackground), in: Circle())
+                .overlay {
+                    Circle()
+                        .stroke(Color(uiColor: .separator), lineWidth: 1)
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
     }
 }
