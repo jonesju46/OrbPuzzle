@@ -148,8 +148,11 @@ final class OrbGrid {
         let flipColumns = Bool.random(using: &generator)
         assign((0..<rows).flatMap { row in
             (0..<columns).map { column in
-                palette[layout[flipRows ? rows - 1 - row : row]
-                    [flipColumns ? columns - 1 - column : column]]
+                let sourceRow = flipRows ? rows - 1 - row : row
+                let sourceColumn = flipColumns ? columns - 1 - column : column
+                let paletteIndex = layout[sourceRow][sourceColumn]
+                let orbType = palette[paletteIndex]
+                return orbType
             }
         })
         assert(detector.detect(in: self).isEmpty)
