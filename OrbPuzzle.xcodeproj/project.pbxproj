@@ -29,6 +29,13 @@
 		A00000000000000000000015 /* ResolveResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000018 /* ResolveResult.swift */; };
 		A00000000000000000000016 /* GameAudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000019 /* GameAudioManager.swift */; };
 		A00000000000000000000017 /* BattleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000020 /* BattleController.swift */; };
+		A90000000000000000000001 /* combo_C4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000001 /* combo_C4.wav */; };
+		A90000000000000000000002 /* combo_D4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000002 /* combo_D4.wav */; };
+		A90000000000000000000003 /* combo_E4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000003 /* combo_E4.wav */; };
+		A90000000000000000000004 /* combo_F4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000004 /* combo_F4.wav */; };
+		A90000000000000000000005 /* combo_G4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000005 /* combo_G4.wav */; };
+		A90000000000000000000006 /* combo_A4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000006 /* combo_A4.wav */; };
+		A90000000000000000000007 /* combo_B4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000007 /* combo_B4.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -68,6 +75,13 @@
 		B00000000000000000000018 /* ResolveResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveResult.swift; sourceTree = "<group>"; };
 		B00000000000000000000019 /* GameAudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameAudioManager.swift; sourceTree = "<group>"; };
 		B00000000000000000000020 /* BattleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BattleController.swift; sourceTree = "<group>"; };
+		B90000000000000000000001 /* combo_C4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_C4.wav; sourceTree = "<group>"; };
+		B90000000000000000000002 /* combo_D4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_D4.wav; sourceTree = "<group>"; };
+		B90000000000000000000003 /* combo_E4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_E4.wav; sourceTree = "<group>"; };
+		B90000000000000000000004 /* combo_F4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_F4.wav; sourceTree = "<group>"; };
+		B90000000000000000000005 /* combo_G4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_G4.wav; sourceTree = "<group>"; };
+		B90000000000000000000006 /* combo_A4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_A4.wav; sourceTree = "<group>"; };
+		B90000000000000000000007 /* combo_B4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_B4.wav; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,7 +102,7 @@
 		};
 		F00000000000000000000003 /* OrbPuzzle */ = {
 			isa = PBXGroup;
-			children = (F00000000000000000000004 /* App */, F00000000000000000000005 /* Game */, F00000000000000000000006 /* Settings */, F00000000000000000000007 /* Views */, B00000000000000000000012 /* Assets.xcassets */);
+			children = (F00000000000000000000004 /* App */, F00000000000000000000005 /* Game */, F00000000000000000000006 /* Settings */, F00000000000000000000007 /* Views */, F90000000000000000000001 /* Audio */, B00000000000000000000012 /* Assets.xcassets */);
 			path = OrbPuzzle;
 			sourceTree = "<group>";
 		};
@@ -103,6 +117,7 @@
 		F00000000000000000000007 /* Views */ = {isa = PBXGroup; children = (B0000000000000000000000F, B00000000000000000000010, B00000000000000000000011, B00000000000000000000017); path = Views; sourceTree = "<group>"; };
 		F00000000000000000000008 /* OrbPuzzleTests */ = {isa = PBXGroup; children = (B00000000000000000000013); path = OrbPuzzleTests; sourceTree = "<group>"; };
 		F00000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B00000000000000000000014, B00000000000000000000015); name = Products; sourceTree = "<group>"; };
+		F90000000000000000000001 /* Audio */ = {isa = PBXGroup; children = (B90000000000000000000001, B90000000000000000000002, B90000000000000000000003, B90000000000000000000004, B90000000000000000000005, B90000000000000000000006, B90000000000000000000007); path = Audio; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -148,7 +163,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		C00000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000012 /* Assets.xcassets in Resources */); runOnlyForDeploymentPostprocessing = 0; };
+		C00000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000012 /* Assets.xcassets in Resources */, A90000000000000000000001, A90000000000000000000002, A90000000000000000000003, A90000000000000000000004, A90000000000000000000005, A90000000000000000000006, A90000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
 		C00000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 

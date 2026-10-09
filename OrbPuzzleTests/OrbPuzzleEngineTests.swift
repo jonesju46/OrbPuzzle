@@ -1,5 +1,6 @@
 import CoreGraphics
 import SpriteKit
+import AVFoundation
 import XCTest
 @testable import OrbPuzzle
 
@@ -34,9 +35,9 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertTrue((8...10).contains(grid.theoreticalMaxCombo))
             histogram[grid.theoreticalMaxCombo, default: 0] += 1
         }
-        XCTAssertTrue((3_700...4_300).contains(histogram[8, default: 0]))
-        XCTAssertTrue((4_200...4_800).contains(histogram[9, default: 0]))
-        XCTAssertTrue((1_200...1_800).contains(histogram[10, default: 0]))
+        XCTAssertTrue((1_700...2_300).contains(histogram[8, default: 0]))
+        XCTAssertTrue((2_700...3_300).contains(histogram[9, default: 0]))
+        XCTAssertTrue((4_700...5_300).contains(histogram[10, default: 0]))
         for total in colorTotals.values {
             XCTAssertLessThan(abs(Double(total) / 10_000 - 5), 0.10)
         }
@@ -443,7 +444,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
     func testComboSoundIndexLoopsEverySevenCombos() {
         let expected: [Int: Int] = [
             1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
-            8: 1, 9: 2, 10: 3, 14: 7, 15: 1, 99: 1
+            8: 1, 9: 2, 10: 3, 14: 7, 15: 1, 91: 7, 92: 1, 99: 1
         ]
 
         for (comboNumber, soundIndex) in expected {
@@ -508,15 +509,42 @@ final class OrbPuzzleEngineTests: XCTestCase {
     }
 
     func testMissingComboSoundAssetFailsSafely() {
-        var requestedResource: (name: String, fileExtension: String)?
+        var requested: [String] = []
         let audioManager = GameAudioManager { name, fileExtension in
-            requestedResource = (name, fileExtension)
+            requested.append("\(name).\(fileExtension)")
             return nil
         }
-
         XCTAssertFalse(audioManager.playComboSound(comboNumber: 5))
-        XCTAssertEqual(requestedResource?.name, "combo_5")
-        XCTAssertEqual(requestedResource?.fileExtension, "wav")
+        XCTAssertTrue(requested.contains("combo_G4.wav"))
+    }
+
+    func testPianoNotesCycleOnlyWithinFourthOctave() {
+        let expected = [1:"C4",2:"D4",3:"E4",4:"F4",5:"G4",6:"A4",7:"B4",
+                        8:"C4",9:"D4",14:"B4",15:"C4",91:"B4",92:"C4",99:"C4"]
+        for (combo, note) in expected {
+            XCTAssertEqual(ComboSoundSequence.note(for: combo), note)
+            XCTAssertEqual(ComboSoundSequence.resourceName(for: combo), "combo_\(note)")
+        }
+    }
+
+    func testPianoResourcesExistAndDecodeInAppBundle() throws {
+        let bundle = Bundle(for: GameScene.self)
+        for note in ComboSoundSequence.notes {
+            let url = try XCTUnwrap(bundle.url(forResource: "combo_\(note)", withExtension: "wav"))
+            let player = try AVAudioPlayer(contentsOf: url)
+            XCTAssertEqual(player.duration, 0.300, accuracy: 0.005)
+            XCTAssertEqual(player.numberOfChannels, 1)
+        }
+    }
+
+    func testComboAudioPreloadLooksUpEachResourceOnlyOnce() {
+        var requests: [String] = []
+        let manager = GameAudioManager { name, _ in requests.append(name); return nil }
+        manager.preload()
+        manager.preload()
+        _ = manager.playComboSound(comboNumber: 1)
+        XCTAssertEqual(requests.count, 7)
+        XCTAssertEqual(Set(requests), Set(ComboSoundSequence.notes.map { "combo_\($0)" }))
     }
 
     func testNewTurnRestartsComboSoundAtOne() {
@@ -863,6 +891,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertEqual(grid.refill(types: plan.types, at: slots).count, count)
                 let detected = MatchDetector().detect(in: grid)
                 XCTAssertEqual(detected.count, 1, "slots=\(count) seed=\(seed)")
+                XCTAssertTrue(detected.contains { $0.positions.isSubset(of: Set(slots)) })
                 XCTAssertEqual(plan.plannedTarget, detected.count)
                 XCTAssertTrue(grid.emptyPositions().isEmpty)
                 XCTAssertEqual(allOrbIDs(in: grid).count, 30)
@@ -873,7 +902,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
-    func testFriendlyTargetOneCompletesPreservedRunWithoutThreeCollinearNewSlots() {
+    func testFriendlyTargetCannotSubstitutePreservedRunForDirectNewSlotGroup() {
         for count in 3...6 {
             var board = stableBoardTypes()
             board[4][0] = .heart
@@ -888,16 +917,65 @@ final class OrbPuzzleEngineTests: XCTestCase {
             _ = grid.remove(positions)
             var generator = SeededGenerator(seed: UInt64(3_000 + count))
             let slots = grid.emptyPositions()
-            guard let plan = SkyfallController().makeFriendlyNaturalRefill(
+            XCTAssertNil(SkyfallController().makeFriendlyNaturalRefill(
                 grid: grid, refillSlots: slots, targetGroupCount: 1, using: &generator
-            ) else {
-                XCTFail("Expected compatible preserved-orb run for \(count) vacancies")
-                continue
-            }
-            _ = grid.refill(types: plan.types, at: slots)
-            XCTAssertGreaterThanOrEqual(MatchDetector().detect(in: grid).count, 1)
+            ))
+            guard let types = SkyfallController().makeNonForcedRefill(
+                grid: grid, refillSlots: slots, using: &generator
+            ) else { XCTFail("Missing complete non-forced refill"); continue }
+            _ = grid.refill(types: types, at: slots)
             XCTAssertTrue(grid.emptyPositions().isEmpty)
             XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        }
+    }
+
+    func testOneNormalizedGroupKeepsFiftyPercentForThreeThroughThirtyOrbs() {
+        let shapes: [[GridPosition]] = [
+            (0..<3).map { GridPosition(row: 2, column: $0) },
+            (0..<4).map { GridPosition(row: 2, column: $0) },
+            (0..<5).map { GridPosition(row: 2, column: $0) },
+            (0..<6).map { GridPosition(row: 2, column: $0) },
+            (0..<2).flatMap { row in (0..<5).map { GridPosition(row: row, column: $0) } },
+            (0..<4).flatMap { row in (0..<5).map { GridPosition(row: row, column: $0) } },
+            (0..<5).flatMap { row in (0..<6).map { GridPosition(row: row, column: $0) } }
+        ]
+        for shape in shapes {
+            var board = matchTestBoardTypes()
+            for position in shape { board[position.row][position.column] = .heart }
+            let grid = OrbGrid(types: board)
+            let resolution = ResolveResult(matches: MatchDetector().detect(in: grid))
+            XCTAssertEqual(resolution.comboCount, 1)
+            XCTAssertEqual(resolution.removedOrbCount, shape.count)
+            _ = grid.remove(resolution.removedPositions)
+            _ = grid.collapse()
+            for roll in [0.32, 0.504] {
+                var generator = SeededGenerator(seed: UInt64(11_000 + shape.count))
+                let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                    previousResolvedGroupCount: resolution.comboCount,
+                    emptySlotCount: grid.emptyPositions().count, roll: { _ in roll }
+                )
+                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
+                XCTAssertEqual(decision.selectedTarget, roll < 0.50 ? 1 : 0)
+                let copy = OrbGrid(types: board)
+                _ = copy.remove(resolution.removedPositions)
+                _ = copy.collapse()
+                let preparation = FriendlyRefillPipeline.prepare(
+                    grid: copy, previousResolution: resolution, controller: SkyfallController(),
+                    using: &generator, roll: { _ in roll }
+                )
+                let slots = Set(preparation.slots)
+                XCTAssertEqual(preparation.refill(in: copy).count, shape.count)
+                XCTAssertEqual(allOrbIDs(in: copy).count, 30)
+                XCTAssertTrue(copy.emptyPositions().isEmpty)
+                if roll < 0.50 {
+                    XCTAssertTrue(preparation.usesFriendlyTypes)
+                    XCTAssertTrue(FriendlyRefillPipeline.scan(in: copy).matches.contains {
+                        $0.positions.isSubset(of: slots)
+                    })
+                } else {
+                    XCTAssertFalse(preparation.planCalled)
+                }
+            }
         }
     }
 
@@ -962,6 +1040,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertTrue(preparation.planCalled, name)
                 XCTAssertNotNil(preparation.plan, name)
                 XCTAssertTrue(preparation.usesFriendlyTypes, name)
+                XCTAssertGreaterThanOrEqual(preparation.directGroupCount, 1, name)
                 XCTAssertNil(preparation.fallbackReason, name)
                 XCTAssertEqual(preparation.types, preparation.plan?.types, name)
                 // Exercise the actual Scene refill adapter, including plan consumption.
@@ -973,6 +1052,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 )
                 let scan = FriendlyRefillPipeline.scan(in: grid)
                 XCTAssertGreaterThanOrEqual(scan.matches.count, 1, "\(name) seed=\(seed)")
+                XCTAssertTrue(scan.matches.contains { $0.positions.isSubset(of: Set(actualSlots)) }, name)
                 XCTAssertEqual(scan.matches.count, preparation.validationDetectedGroups, name)
                 XCTAssertEqual(refill.spawns.count, shape.count, name)
                 XCTAssertEqual(refill.nodes.count, shape.count, name)

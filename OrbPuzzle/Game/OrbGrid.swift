@@ -118,7 +118,7 @@ final class OrbGrid {
     ) {
         precondition(rows == Self.defaultRows && columns == Self.defaultColumns)
         let roll = Int.random(in: 0..<100, using: &generator)
-        let target = roll < 40 ? 8 : (roll < 85 ? 9 : 10)
+        let target = roll < 20 ? 8 : (roll < 50 ? 9 : 10)
         guard let quota = Self.initialQuotas[target]?.randomElement(using: &generator)
         else { preconditionFailure("Missing initial-board quota") }
         let bag = zip(OrbType.allCases, quota).flatMap { type, count in

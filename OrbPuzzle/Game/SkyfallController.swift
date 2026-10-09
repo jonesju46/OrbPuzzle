@@ -224,20 +224,6 @@ final class SkyfallController {
               refillSlots == grid.emptyPositions(),
               !refillSlots.isEmpty else { return nil }
 
-        // Gravity may already have formed a real match from preserved orbs. Fill
-        // only the empty slots safely and let the full-board detector resolve it.
-        if !MatchDetector().detect(in: grid).isEmpty {
-            guard let types = makeSafeRefill(
-                grid: grid,
-                refillSlots: refillSlots,
-                using: &generator
-            ) else { return nil }
-            let plannedTarget = MatchDetector().detect(
-                in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
-            ).count
-            return FriendlyRefillPlan(types: types, plannedTarget: plannedTarget)
-        }
-
         let maximumGroupCount = min(
             targetGroupCount,
             refillSlots.count / 3,
@@ -262,62 +248,55 @@ final class SkyfallController {
         )
     }
 
-    /// Friendly OFF mode must not depend on finding three collinear NEW slots
-    /// or on a random full-board assignment happening to complete a match.
-    /// Enumerate compatible runs, including runs completed by preserved orbs.
-    /// Force their new slots before safe-filling every remaining actual vacancy.
+    /// Friendly guarantees must be made entirely from this refill's new orbs.
+    /// Preserved-orb matches are natural extras, never substitutes for the target.
     private func makeFriendlyMatchProducingRefill<R: RandomNumberGenerator>(
         grid: OrbGrid,
         refillSlots: [GridPosition],
         maximumGroupCount: Int,
         using generator: inout R
     ) -> (types: [OrbType], forcedTypes: [GridPosition: OrbType], strategy: String)? {
-        // Retain the existing multi-group search, without changing ON planning.
-        if maximumGroupCount > 1,
-           let types = makeMatchProducingRefill(
-            grid: grid,
-            refillSlots: refillSlots,
-            maximumGroupCount: maximumGroupCount,
-            using: &generator
-           ) { return (types, [:], "multi-group-search") }
-
-        let empty = Set(refillSlots)
-        var runs: [[GridPosition]] = []
-        for row in 0..<grid.rows {
-            for column in 0..<grid.columns {
-                if column + 2 < grid.columns {
-                    runs.append((0..<3).map { GridPosition(row: row, column: column + $0) })
-                }
-                if row + 2 < grid.rows {
-                    runs.append((0..<3).map { GridPosition(row: row + $0, column: column) })
+        let slots = Set(refillSlots)
+        let candidates = tripleCandidates(in: slots)
+        if maximumGroupCount == 1 {
+            // Exhaust every direct triple/color rather than leaving a winning
+            // one-group roll dependent on a second random search succeeding.
+            for group in candidates.shuffled(using: &generator) {
+                for type in OrbType.allCases.shuffled(using: &generator) {
+                    let forced = Dictionary(uniqueKeysWithValues: group.map { ($0, type) })
+                    guard let types = planTypes(grid: grid, refillSlots: refillSlots,
+                                                forcedTypes: forced, using: &generator) else { continue }
+                    let matches = MatchDetector().detect(
+                        in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
+                    )
+                    if matches.contains(where: { $0.positions.isSubset(of: slots) }) {
+                        return (types, forced, "direct-new-slots")
+                    }
                 }
             }
+            return nil
         }
-        for run in runs.shuffled(using: &generator) {
-            let newSlots = run.filter { empty.contains($0) }
-            guard !newSlots.isEmpty else { continue }
-            for type in OrbType.allCases.shuffled(using: &generator) {
-                guard run.allSatisfy({ empty.contains($0) || grid.orb(at: $0)?.type == type })
-                else { continue }
-                let forced = Dictionary(uniqueKeysWithValues: newSlots.map { ($0, type) })
-                guard let types = planTypes(
-                    grid: grid,
-                    refillSlots: refillSlots,
-                    forcedTypes: forced,
-                    using: &generator
-                ) else { continue }
-                // Extra slots never overwrite the forced run. Validate the
-                // complete board, not assignment/spawn counts alone.
+        for desired in stride(from: maximumGroupCount, through: 1, by: -1) {
+            if desired == 1 {
+                return makeFriendlyMatchProducingRefill(
+                    grid: grid, refillSlots: refillSlots, maximumGroupCount: 1, using: &generator
+                )
+            }
+            for _ in 0..<192 {
+                guard let groups = selectDisjointCandidates(count: desired, from: candidates,
+                                                           using: &generator) else { break }
+                let forced = forcedTypeAssignments(for: groups, using: &generator)
+                guard let types = planTypes(grid: grid, refillSlots: refillSlots,
+                                            forcedTypes: forced, using: &generator) else { continue }
                 let matches = MatchDetector().detect(
                     in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
                 )
-                // OFF target is desired, not an exact cap. Natural extras must
-                // not discard a real match and send this cycle to safe refill.
-                if !matches.isEmpty { return (types, forced, "compatible-run") }
+                let direct = matches.filter { $0.positions.isSubset(of: slots) }.count
+                // Natural extras may exceed the desired target. A direct group
+                // must still contain ONLY new positions after normalization.
+                if direct >= desired { return (types, forced, "direct-new-slots") }
             }
         }
-        // No compatible assignment passed full-board validation: the caller
-        // still fills all slots through makeNonForcedRefill. Never fabricate success.
         return nil
     }
 
@@ -630,6 +609,7 @@ struct FriendlyRefillPreparation {
     let plan: FriendlyRefillPlan?
     let types: [OrbType]
     let validationDetectedGroups: Int?
+    let directGroupCount: Int
     let usesFriendlyTypes: Bool
     let fallbackReason: String?
 
@@ -652,7 +632,7 @@ struct FriendlyRefillPreparation {
         let forced = plan?.forcedTypes ?? [:]
         let positions = forced.keys.sorted { ($0.row, $0.column) < ($1.row, $1.column) }
         let forcedTypes = positions.map { forced[$0]?.rawValue ?? "missing" }
-        print("[FRIENDLY_PLAN] resolveID=\(resolveID) selectedTarget=\(decision.selectedTarget) plannedTarget=\(plan?.plannedTarget.description ?? "none") refillSlots=\(FriendlyRefillPipeline.describe(slots)) planCalled=\(planCalled) planReturned=\(plan != nil) plannedTypeCount=\(plan?.types.count ?? 0) forcedPositions=\(FriendlyRefillPipeline.describe(positions)) forcedTypes=\(forcedTypes) strategy=\(plan?.strategy ?? "none") forcedTraceAvailable=\(plan != nil && plan?.strategy != "multi-group-search") validationDetectedGroups=\(validationDetectedGroups?.description ?? "none") fallbackUsed=\(!usesFriendlyTypes) fallbackReason=\(fallbackReason ?? "none") planUsed=\(usesFriendlyTypes) refillMode=\(refillMode)")
+        print("[FRIENDLY_PLAN] resolveID=\(resolveID) selectedTarget=\(decision.selectedTarget) plannedTarget=\(plan?.plannedTarget.description ?? "none") refillSlots=\(FriendlyRefillPipeline.describe(slots)) planCalled=\(planCalled) planReturned=\(plan != nil) plannedTypeCount=\(plan?.types.count ?? 0) forcedPositions=\(FriendlyRefillPipeline.describe(positions)) forcedTypes=\(forcedTypes) strategy=\(plan?.strategy ?? "none") forcedTraceAvailable=\(plan != nil && plan?.strategy != "multi-group-search") validationDetectedGroups=\(validationDetectedGroups?.description ?? "none") directGroups=\(directGroupCount) fallbackUsed=\(!usesFriendlyTypes) fallbackReason=\(fallbackReason ?? "none") planUsed=\(usesFriendlyTypes) refillMode=\(refillMode)")
     }
 #endif
 }
@@ -700,6 +680,7 @@ enum FriendlyRefillPipeline {
             plan = nil
         }
         var detected: Int?
+        var direct = 0
         var reason: String?
         if let plan {
             if plan.types.count != slots.count {
@@ -714,19 +695,33 @@ enum FriendlyRefillPipeline {
                         return type
                     }
                 }
-                detected = scan(in: OrbGrid(types: completeTypes)).matches.count
+                let matches = scan(in: OrbGrid(types: completeTypes)).matches
+                detected = matches.count
+                let slotSet = Set(slots)
+                direct = matches.filter { $0.positions.isSubset(of: slotSet) }.count
                 if detected == 0 { reason = "full-grid-validation-zero-groups" }
+                else if direct == 0 { reason = "no-direct-new-slot-group" }
             }
             if reason == nil {
                 return FriendlyRefillPreparation(
                     slots: slots, decision: decision, planCalled: called, plan: plan,
-                    types: plan.types, validationDetectedGroups: detected,
+                    types: plan.types, validationDetectedGroups: detected, directGroupCount: direct,
                     usesFriendlyTypes: true, fallbackReason: nil
                 )
             }
         } else {
-            reason = called ? "planner-returned-nil"
-                : (decision.candidateMaxGroups == 0 ? "insufficient-candidate-groups" : "roll-miss")
+            if called {
+                let empty = Set(slots)
+                let hasDirectGeometry = slots.contains { position in
+                    (empty.contains(GridPosition(row: position.row, column: position.column + 1))
+                     && empty.contains(GridPosition(row: position.row, column: position.column + 2)))
+                    || (empty.contains(GridPosition(row: position.row + 1, column: position.column))
+                        && empty.contains(GridPosition(row: position.row + 2, column: position.column)))
+                }
+                reason = hasDirectGeometry ? "planner-returned-nil" : "no-direct-new-slot-geometry"
+            } else {
+                reason = decision.candidateMaxGroups == 0 ? "insufficient-candidate-groups" : "roll-miss"
+            }
         }
         let nonForced = controller.makeNonForcedRefill(grid: grid, refillSlots: slots, using: &generator)
         let types: [OrbType]
@@ -741,7 +736,7 @@ enum FriendlyRefillPipeline {
         }
         return FriendlyRefillPreparation(
             slots: slots, decision: decision, planCalled: called, plan: plan,
-            types: types, validationDetectedGroups: detected,
+            types: types, validationDetectedGroups: detected, directGroupCount: direct,
             usesFriendlyTypes: false, fallbackReason: reason
         )
     }
@@ -757,3 +752,24 @@ enum FriendlyRefillPipeline {
     }
 #endif
 }
+
+#if DEBUG
+struct FriendlyRefillDebugStatistics {
+    var eligible = 0
+    var targets = 0
+    var plans = 0
+    var detected = 0
+
+    mutating func record(_ preparation: FriendlyRefillPreparation) {
+        if preparation.decision.candidateMaxGroups > 0 { eligible += 1 }
+        if preparation.decision.selectedTarget > 0 { targets += 1 }
+        if preparation.usesFriendlyTypes { plans += 1 }
+    }
+
+    mutating func recordPostRefill(_ matches: [MatchResult], preparation: FriendlyRefillPreparation) {
+        guard preparation.usesFriendlyTypes else { return }
+        let slots = Set(preparation.slots)
+        if matches.contains(where: { $0.positions.isSubset(of: slots) }) { detected += 1 }
+    }
+}
+#endif
