@@ -52,6 +52,7 @@ final class GameScene: SKScene {
     private var friendlyDebugPreparation: FriendlyRefillPreparation?
     private var friendlyDebugDetectedGroups: Int?
     private var friendlyDebugStatistics: [Int: FriendlyRefillDebugStatistics] = [:]
+    private var friendlyTargetStatistics: [Int: FriendlyTargetDebugStatistics] = [:]
 #endif
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
@@ -239,7 +240,7 @@ final class GameScene: SKScene {
             addChild(label)
             orbTypeDebugLabels.append(label)
         }
-        for _ in 0..<7 {
+        for _ in 0..<9 {
             let label = SKLabelNode(fontNamed: "Menlo")
             label.fontSize = 10
             label.fontColor = .systemYellow
@@ -388,7 +389,7 @@ final class GameScene: SKScene {
 
 #if DEBUG
         // Fit the diagnostic rows below the board, without moving gameplay UI.
-        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 172))
+        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 196))
         for (index, label) in debugLabels.enumerated() {
             label.fontSize = 10 * debugScale
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
@@ -964,6 +965,10 @@ final class GameScene: SKScene {
         if let friendlyPreparation {
             friendlyDebugStatistics[friendlyPreparation.slots.count, default: FriendlyRefillDebugStatistics()]
                 .record(friendlyPreparation)
+            if friendlyPreparation.decision.selectedTarget > 0 {
+                friendlyTargetStatistics[friendlyPreparation.decision.selectedTarget, default: FriendlyTargetDebugStatistics()]
+                    .record(friendlyPreparation)
+            }
         }
         updateFriendlyDebugHUD()
 #endif
@@ -1054,6 +1059,13 @@ final class GameScene: SKScene {
                 if let preparation = friendlyPreparation {
                     self.friendlyDebugStatistics[preparation.slots.count, default: FriendlyRefillDebugStatistics()]
                         .recordPostRefill(matches, preparation: preparation)
+                    if preparation.decision.selectedTarget > 0 {
+                        let target = preparation.decision.selectedTarget
+                        self.friendlyTargetStatistics[target, default: FriendlyTargetDebugStatistics()]
+                            .recordPostRefill(matches, preparation: preparation)
+                        let targetStats = self.friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
+                        print("[FRIENDLY_TARGET_STATS] selected=\(target) attempts=\(targetStats.attempts) plannedExact=\(targetStats.plannedExact) detectedExactOrMore=\(targetStats.detectedExactOrMore)")
+                    }
                     let stats = self.friendlyDebugStatistics[preparation.slots.count] ?? FriendlyRefillDebugStatistics()
                     print("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
                 }
@@ -1263,20 +1275,23 @@ final class GameScene: SKScene {
 
 #if DEBUG
     private func updateFriendlyDebugHUD() {
-        guard friendlyDebugLabels.count == 7 else { return }
+        guard friendlyDebugLabels.count == 9 else { return }
         let preparation = friendlyDebugPreparation
         let decision = preparation?.decision
         let attempt = decision?.rolls.last
         let rollText = attempt.map { String(format: "%.3f / %.3f", $0.roll, $0.probability) } ?? "-"
-        let stats = friendlyDebugStatistics[preparation?.slots.count ?? 0] ?? FriendlyRefillDebugStatistics()
+        let target = decision?.selectedTarget ?? 0
+        let stats = friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
         let texts = [
             "FRIENDLY (latest refill)",
-            "Prev: \(decision?.previousResolvedGroupCount.description ?? "-") Slots: \(decision?.emptySlotCount.description ?? "-")",
-            "Roll: \(rollText) Target: \(decision?.selectedTarget.description ?? "-")",
-            "Plan: \(preparation?.plan?.plannedTarget.description ?? "-") Direct: \(preparation?.directGroupCount.description ?? "-")",
-            "Mode: \(preparation?.refillMode ?? "-")",
-            "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Fallback: \(preparation?.fallbackReason ?? "-")",
-            "Slots \(preparation?.slots.count ?? 0): E \(stats.eligible) T \(stats.targets) P \(stats.plans) D \(stats.detected)"
+            "PrevGroups: \(decision?.previousResolvedGroupCount.description ?? "-") Removed: \(preparation?.removedOrbCount.description ?? "-")",
+            "Slots: \(preparation?.slots.count.description ?? "-") Candidate: \(decision?.candidateMaxGroups.description ?? "-")",
+            "Roll: \(rollText) Selected: \(target)",
+            "Planned: \(preparation?.plan?.plannedTarget.description ?? "-") Direct: \(preparation?.directGroupCount.description ?? "-")",
+            "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Mode: \(preparation?.refillMode ?? "-")",
+            "Fallback: \(preparation?.fallbackReason ?? "-")",
+            "Target \(target): Attempts \(stats.attempts) PlannedExact \(stats.plannedExact)",
+            "DetectedExactOrMore: \(stats.detectedExactOrMore)"
         ]
         for (label, text) in zip(friendlyDebugLabels, texts) {
             label.text = text

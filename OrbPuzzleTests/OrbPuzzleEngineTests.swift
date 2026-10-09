@@ -1066,6 +1066,117 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
+    func testFriendlyFixedTargetsOneThroughSixAfterActualRefill() {
+        for target in 1...6 {
+            for seed in 0..<16 {
+                var board = matchTestBoardTypes()
+                let colors: [OrbType] = [.heart, .water, .light]
+                for index in 0..<target {
+                    let row = 4 - index / 2
+                    let firstColumn = (index % 2) * 3
+                    for column in firstColumn..<(firstColumn + 3) {
+                        board[row][column] = colors[index % colors.count]
+                    }
+                }
+                let grid = OrbGrid(types: board)
+                let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+                XCTAssertEqual(manual.comboCount, target)
+                _ = grid.remove(manual.removedPositions)
+                _ = grid.collapse()
+                var generator = SeededGenerator(seed: UInt64(20_000 + target * 100 + seed))
+                let preparation = FriendlyRefillPipeline.prepare(
+                    grid: grid, previousResolution: manual, controller: SkyfallController(),
+                    using: &generator, roll: { group in group == target ? 0 : 0.99 }
+                )
+                XCTAssertEqual(preparation.slots.count, target * 3)
+                XCTAssertEqual(preparation.decision.selectedTarget, target)
+                XCTAssertTrue(preparation.usesFriendlyTypes, "target=\(target) seed=\(seed)")
+                XCTAssertGreaterThanOrEqual(preparation.directGroupCount, target)
+                XCTAssertEqual(preparation.plan?.forcedGroups.count, target)
+                XCTAssertEqual(preparation.refill(in: grid).count, target * 3)
+                let matches = FriendlyRefillPipeline.scan(in: grid).matches
+                let direct = matches.filter { $0.positions.isSubset(of: Set(preparation.slots)) }.count
+                XCTAssertGreaterThanOrEqual(direct, target)
+                XCTAssertGreaterThanOrEqual(matches.count, target)
+                XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+                XCTAssertTrue(grid.emptyPositions().isEmpty)
+                print("[FIXED_TARGET_REGRESSION] target=\(target) seed=\(seed) plannedDirect=\(preparation.directGroupCount) detectedDirect=\(direct) detected=\(matches.count)")
+            }
+        }
+    }
+
+    func testFriendlySixFourOrbGroupsPreserveHighSelectedTargets() {
+        for target in 4...6 {
+            var board = matchTestBoardTypes()
+            let colors: [OrbType] = [.heart, .water, .light]
+            for row in 1...4 {
+                for column in 0..<6 { board[row][column] = colors[column % 3] }
+            }
+            let grid = OrbGrid(types: board)
+            let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+            XCTAssertEqual(manual.comboCount, 6)
+            XCTAssertEqual(manual.removedOrbCount, 24)
+            _ = grid.remove(manual.removedPositions)
+            _ = grid.collapse()
+            var generator = SeededGenerator(seed: UInt64(30_000 + target))
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: manual, controller: SkyfallController(),
+                using: &generator, roll: { group in group == target ? 0 : 0.99 }
+            )
+            XCTAssertEqual(preparation.decision.selectedTarget, target)
+            XCTAssertTrue(preparation.usesFriendlyTypes)
+            XCTAssertGreaterThanOrEqual(preparation.directGroupCount, target)
+            XCTAssertEqual(preparation.refill(in: grid).count, 24)
+            let matches = FriendlyRefillPipeline.scan(in: grid).matches
+            XCTAssertGreaterThanOrEqual(matches.filter {
+                $0.positions.isSubset(of: Set(preparation.slots))
+            }.count, target)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+        }
+    }
+
+    func testFriendlyRejectsPlanBelowSelectedTarget() {
+        var board = matchTestBoardTypes()
+        for column in 0..<3 { board[4][column] = .heart }
+        for column in 3..<6 { board[4][column] = .light }
+        let grid = OrbGrid(types: board)
+        let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+        XCTAssertEqual(manual.comboCount, 2)
+        _ = grid.remove(manual.removedPositions)
+        _ = grid.collapse()
+        var generator = SeededGenerator(seed: 40_001)
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: manual, controller: SkyfallController(),
+            using: &generator, roll: { _ in 0 },
+            planProvider: { _, _, _ in
+                FriendlyRefillPlan(types: Array(repeating: .heart, count: 6), plannedTarget: 1)
+            }
+        )
+        XCTAssertEqual(preparation.decision.selectedTarget, 2)
+        XCTAssertEqual(preparation.directGroupCount, 1)
+        XCTAssertFalse(preparation.usesFriendlyTypes)
+        XCTAssertEqual(preparation.fallbackReason, "direct-groups-below-selected-target")
+        XCTAssertEqual(preparation.refill(in: grid).count, 6)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testFriendlyImpossibleGeometryReturnsFailureWithoutShrinkingTarget() {
+        let grid = OrbGrid(types: matchTestBoardTypes())
+        let slots: Set<GridPosition> = [
+            GridPosition(row: 4, column: 0), GridPosition(row: 3, column: 0),
+            GridPosition(row: 4, column: 1), GridPosition(row: 4, column: 3),
+            GridPosition(row: 3, column: 3), GridPosition(row: 4, column: 4)
+        ]
+        _ = grid.remove(slots)
+        let controller = SkyfallController()
+        var generator = SeededGenerator(seed: 40_002)
+        XCTAssertNil(controller.makeFriendlyNaturalRefill(
+            grid: grid, refillSlots: grid.emptyPositions(), targetGroupCount: 2, using: &generator
+        ))
+        XCTAssertEqual(controller.lastFriendlyPlanningFailure, "no-feasible-direct-target")
+    }
+
     func testSceneFriendlyPipelineUsesValidPlanWithExtraNormalizedGroups() {
         var board = matchTestBoardTypes()
         for column in 0..<6 { board[4][column] = .heart }
