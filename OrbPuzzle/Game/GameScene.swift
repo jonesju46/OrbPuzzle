@@ -1285,7 +1285,7 @@ final class GameScene: SKScene {
         let texts = [
             "FRIENDLY (latest refill)",
             "PrevGroups: \(decision?.previousResolvedGroupCount.description ?? "-") Removed: \(preparation?.removedOrbCount.description ?? "-")",
-            "Slots: \(preparation?.slots.count.description ?? "-") Candidate: \(decision?.candidateMaxGroups.description ?? "-")",
+            "Slots: \(preparation?.slots.count.description ?? "-") Capacity: \(decision?.capacityTarget.description ?? "-")",
             "Roll: \(rollText) Selected: \(target)",
             "Planned: \(preparation?.plan?.plannedTarget.description ?? "-") Direct: \(preparation?.directGroupCount.description ?? "-")",
             "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Mode: \(preparation?.refillMode ?? "-")",

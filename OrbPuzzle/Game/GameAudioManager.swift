@@ -2,8 +2,12 @@ import AVFoundation
 import Foundation
 
 enum ComboSoundSequence {
-    static let notes = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
-    static let stepCount = 7
+    static let notes = [
+        "C3", "D3", "E3", "F3", "G3", "A3", "B3",
+        "C4", "D4", "E4", "F4", "G4", "A4", "B4",
+        "C5", "D5", "E5", "F5", "G5", "A5", "B5"
+    ]
+    static let stepCount = notes.count
     static let fileExtension = "wav"
 
     static func soundIndex(for comboNumber: Int) -> Int? {
@@ -90,14 +94,14 @@ final class GameAudioManager: NSObject, AVAudioPlayerDelegate {
         guard let player = playerPools[name]?.first(where: { !$0.isPlaying }) else {
 #if DEBUG
             print("[AUDIO][ERROR] file=\(name).wav missingOrPoolBusy=true")
-            print("[AUDIO] combo=\(comboNumber) index=\(index) note=\(note) file=\(name).wav play=false")
+            print("[AUDIO] combo=\(comboNumber) soundIndex=\(index) note=\(note) file=\(name).wav play=false")
 #endif
             return false
         }
         player.currentTime = 0
         let played = player.play()
 #if DEBUG
-        print("[AUDIO] combo=\(comboNumber) index=\(index) note=\(note) file=\(name).wav play=\(played)")
+        print("[AUDIO] combo=\(comboNumber) soundIndex=\(index) note=\(note) file=\(name).wav play=\(played)")
 #endif
         return played
     }

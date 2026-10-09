@@ -36,6 +36,20 @@
 		A90000000000000000000005 /* combo_G4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000005 /* combo_G4.wav */; };
 		A90000000000000000000006 /* combo_A4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000006 /* combo_A4.wav */; };
 		A90000000000000000000007 /* combo_B4.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000007 /* combo_B4.wav */; };
+		A90000000000000000000008 /* combo_C3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000008 /* combo_C3.wav */; };
+		A90000000000000000000009 /* combo_D3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000009 /* combo_D3.wav */; };
+		A9000000000000000000000A /* combo_E3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000A /* combo_E3.wav */; };
+		A9000000000000000000000B /* combo_F3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000B /* combo_F3.wav */; };
+		A9000000000000000000000C /* combo_G3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000C /* combo_G3.wav */; };
+		A9000000000000000000000D /* combo_A3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000D /* combo_A3.wav */; };
+		A9000000000000000000000E /* combo_B3.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000E /* combo_B3.wav */; };
+		A9000000000000000000000F /* combo_C5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B9000000000000000000000F /* combo_C5.wav */; };
+		A90000000000000000000010 /* combo_D5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000010 /* combo_D5.wav */; };
+		A90000000000000000000011 /* combo_E5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000011 /* combo_E5.wav */; };
+		A90000000000000000000012 /* combo_F5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000012 /* combo_F5.wav */; };
+		A90000000000000000000013 /* combo_G5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000013 /* combo_G5.wav */; };
+		A90000000000000000000014 /* combo_A5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000014 /* combo_A5.wav */; };
+		A90000000000000000000015 /* combo_B5.wav in Resources */ = {isa = PBXBuildFile; fileRef = B90000000000000000000015 /* combo_B5.wav */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -82,6 +96,20 @@
 		B90000000000000000000005 /* combo_G4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_G4.wav; sourceTree = "<group>"; };
 		B90000000000000000000006 /* combo_A4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_A4.wav; sourceTree = "<group>"; };
 		B90000000000000000000007 /* combo_B4.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_B4.wav; sourceTree = "<group>"; };
+		B90000000000000000000008 /* combo_C3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_C3.wav; sourceTree = "<group>"; };
+		B90000000000000000000009 /* combo_D3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_D3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000A /* combo_E3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_E3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000B /* combo_F3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_F3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000C /* combo_G3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_G3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000D /* combo_A3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_A3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000E /* combo_B3.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_B3.wav; sourceTree = "<group>"; };
+		B9000000000000000000000F /* combo_C5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_C5.wav; sourceTree = "<group>"; };
+		B90000000000000000000010 /* combo_D5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_D5.wav; sourceTree = "<group>"; };
+		B90000000000000000000011 /* combo_E5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_E5.wav; sourceTree = "<group>"; };
+		B90000000000000000000012 /* combo_F5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_F5.wav; sourceTree = "<group>"; };
+		B90000000000000000000013 /* combo_G5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_G5.wav; sourceTree = "<group>"; };
+		B90000000000000000000014 /* combo_A5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_A5.wav; sourceTree = "<group>"; };
+		B90000000000000000000015 /* combo_B5.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = combo_B5.wav; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,7 +145,7 @@
 		F00000000000000000000007 /* Views */ = {isa = PBXGroup; children = (B0000000000000000000000F, B00000000000000000000010, B00000000000000000000011, B00000000000000000000017); path = Views; sourceTree = "<group>"; };
 		F00000000000000000000008 /* OrbPuzzleTests */ = {isa = PBXGroup; children = (B00000000000000000000013); path = OrbPuzzleTests; sourceTree = "<group>"; };
 		F00000000000000000000009 /* Products */ = {isa = PBXGroup; children = (B00000000000000000000014, B00000000000000000000015); name = Products; sourceTree = "<group>"; };
-		F90000000000000000000001 /* Audio */ = {isa = PBXGroup; children = (B90000000000000000000001, B90000000000000000000002, B90000000000000000000003, B90000000000000000000004, B90000000000000000000005, B90000000000000000000006, B90000000000000000000007); path = Audio; sourceTree = "<group>"; };
+		F90000000000000000000001 /* Audio */ = {isa = PBXGroup; children = (B90000000000000000000001, B90000000000000000000002, B90000000000000000000003, B90000000000000000000004, B90000000000000000000005, B90000000000000000000006, B90000000000000000000007, B90000000000000000000008, B90000000000000000000009, B9000000000000000000000A, B9000000000000000000000B, B9000000000000000000000C, B9000000000000000000000D, B9000000000000000000000E, B9000000000000000000000F, B90000000000000000000010, B90000000000000000000011, B90000000000000000000012, B90000000000000000000013, B90000000000000000000014, B90000000000000000000015); path = Audio; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -163,7 +191,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		C00000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000012 /* Assets.xcassets in Resources */, A90000000000000000000001, A90000000000000000000002, A90000000000000000000003, A90000000000000000000004, A90000000000000000000005, A90000000000000000000006, A90000000000000000000007); runOnlyForDeploymentPostprocessing = 0; };
+		C00000000000000000000005 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000012 /* Assets.xcassets in Resources */, A90000000000000000000001, A90000000000000000000002, A90000000000000000000003, A90000000000000000000004, A90000000000000000000005, A90000000000000000000006, A90000000000000000000007, A90000000000000000000008, A90000000000000000000009, A9000000000000000000000A, A9000000000000000000000B, A9000000000000000000000C, A9000000000000000000000D, A9000000000000000000000E, A9000000000000000000000F, A90000000000000000000010, A90000000000000000000011, A90000000000000000000012, A90000000000000000000013, A90000000000000000000014, A90000000000000000000015); runOnlyForDeploymentPostprocessing = 0; };
 		C00000000000000000000006 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 

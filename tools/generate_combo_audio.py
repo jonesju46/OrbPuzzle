@@ -3,10 +3,12 @@ import math, random, struct, wave
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1] / "OrbPuzzle" / "Audio"
 ROOT.mkdir(parents=True, exist_ok=True)
-NOTES = {"C4":261.625565,"D4":293.664768,"E4":329.627557,"F4":349.228231,
-         "G4":391.995436,"A4":440.0,"B4":493.883301}
+MIDDLE = {"C":261.625565,"D":293.664768,"E":329.627557,"F":349.228231,
+          "G":391.995436,"A":440.0,"B":493.883301}
+NOTES = {f"{note}{octave}": frequency * 2 ** (octave - 4)
+         for octave in (3, 4, 5) for note, frequency in MIDDLE.items()}
 for index,(note,freq) in enumerate(NOTES.items()):
-    rng=random.Random(20261009+index)
+    rng=random.Random(20261009+list(MIDDLE).index(note[0]))
     samples=[]
     for i in range(13230):
         t=i/44100

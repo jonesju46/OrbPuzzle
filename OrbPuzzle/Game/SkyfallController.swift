@@ -9,6 +9,8 @@ struct FriendlyRefillRoll: Equatable, Sendable {
 
 struct FriendlyRefillDecision: Equatable, Sendable {
     let previousResolvedGroupCount: Int
+    let removedOrbCount: Int
+    let capacityTarget: Int
     let emptySlotCount: Int
     let physicalMaxGroups: Int
     let candidateMaxGroups: Int
@@ -36,71 +38,42 @@ struct FriendlyRefillPlan: Equatable, Sendable {
 
 enum FriendlyNaturalSkyfallPolicy {
     static let maximumGroupCount = 10
-    static let refillProbabilities: [Double] = [
-        0.50, 0.45, 0.40, 0.35, 0.30,
-        0.25, 0.20, 0.15, 0.10, 0.05
-    ]
+    static let hitProbability = 0.50
 
-    static func refillProbability(for groupCount: Int) -> Double? {
-        guard (1...maximumGroupCount).contains(groupCount) else { return nil }
-        return refillProbabilities[groupCount - 1]
+    static func capacityTarget(for removedOrbCount: Int) -> Int {
+        max(0, removedOrbCount) / 3
     }
 
     static func selectTarget(
         previousResolvedGroupCount: Int,
+        removedOrbCount: Int,
         emptySlotCount: Int,
         roll: (Int) -> Double
     ) -> FriendlyRefillDecision {
+        let capacity = capacityTarget(for: removedOrbCount)
         let physicalMaxGroups = max(0, emptySlotCount) / 3
-        let candidateMaxGroups = min(
-            max(0, previousResolvedGroupCount),
-            physicalMaxGroups,
-            maximumGroupCount
-        )
-
-        guard candidateMaxGroups > 0 else {
-            return FriendlyRefillDecision(
-                previousResolvedGroupCount: previousResolvedGroupCount,
-                emptySlotCount: emptySlotCount,
-                physicalMaxGroups: physicalMaxGroups,
-                candidateMaxGroups: candidateMaxGroups,
-                rolls: [],
-                selectedTarget: 0
-            )
+        // Previous groups and actual slots are diagnostics, never the roll basis.
+        // The planner rejects an impossible target rather than shrinking it.
+        let attempts: [FriendlyRefillRoll]
+        let selectedTarget: Int
+        if capacity > 0 {
+            let value = roll(capacity)
+            let succeeded = value < hitProbability
+            attempts = [FriendlyRefillRoll(groupCount: capacity, probability: hitProbability,
+                                          roll: value, succeeded: succeeded)]
+            selectedTarget = succeeded ? capacity : 0
+        } else {
+            attempts = []
+            selectedTarget = 0
         }
-
-        var attempts: [FriendlyRefillRoll] = []
-        for groupCount in stride(from: candidateMaxGroups, through: 1, by: -1) {
-            guard let probability = refillProbability(for: groupCount) else { continue }
-            let value = roll(groupCount)
-            let succeeded = value < probability
-            attempts.append(FriendlyRefillRoll(
-                groupCount: groupCount,
-                probability: probability,
-                roll: value,
-                succeeded: succeeded
-            ))
-            if succeeded {
-                return FriendlyRefillDecision(
-                    previousResolvedGroupCount: previousResolvedGroupCount,
-                    emptySlotCount: emptySlotCount,
-                    physicalMaxGroups: physicalMaxGroups,
-                    candidateMaxGroups: candidateMaxGroups,
-                    rolls: attempts,
-                    selectedTarget: groupCount
-                )
-            }
-        }
-
         return FriendlyRefillDecision(
             previousResolvedGroupCount: previousResolvedGroupCount,
-            emptySlotCount: emptySlotCount,
-            physicalMaxGroups: physicalMaxGroups,
-            candidateMaxGroups: candidateMaxGroups,
-            rolls: attempts,
-            selectedTarget: 0
+            removedOrbCount: removedOrbCount, capacityTarget: capacity,
+            emptySlotCount: emptySlotCount, physicalMaxGroups: physicalMaxGroups,
+            candidateMaxGroups: capacity, rolls: attempts, selectedTarget: selectedTarget
         )
     }
+
 }
 
 /// Plans only the types for real empty refill slots. Existing Orb models are never
@@ -132,12 +105,14 @@ final class SkyfallController {
 
     func selectFriendlyRefillTarget(
         previousResolvedGroupCount: Int,
+        removedOrbCount: Int,
         emptySlotCount: Int,
         roll: (Int) -> Double = { _ in Double.random(in: 0..<1) }
     ) -> FriendlyRefillDecision? {
         guard !hasControlledTarget else { return nil }
         return FriendlyNaturalSkyfallPolicy.selectTarget(
             previousResolvedGroupCount: previousResolvedGroupCount,
+            removedOrbCount: removedOrbCount,
             emptySlotCount: emptySlotCount,
             roll: roll
         )
@@ -661,10 +636,10 @@ struct FriendlyRefillPreparation {
 #if DEBUG
     func logDebug(resolveID: UInt) {
         for attempt in decision.rolls {
-            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) candidateMaxGroups=\(decision.candidateMaxGroups) probability=\(attempt.probability) roll=\(attempt.roll) attemptedTarget=\(attempt.groupCount) selectedTarget=\(decision.selectedTarget)")
+            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) removedOrbCount=\(decision.removedOrbCount) capacityTarget=\(decision.capacityTarget) probability=\(attempt.probability) roll=\(attempt.roll) attemptedTarget=\(attempt.groupCount) selectedTarget=\(decision.selectedTarget)")
         }
         if decision.rolls.isEmpty {
-            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) candidateMaxGroups=\(decision.candidateMaxGroups) probability=none roll=none selectedTarget=\(decision.selectedTarget)")
+            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) removedOrbCount=\(decision.removedOrbCount) capacityTarget=\(decision.capacityTarget) probability=none roll=none selectedTarget=\(decision.selectedTarget)")
         }
         let forced = plan?.forcedTypes ?? [:]
         let positions = forced.keys.sorted { ($0.row, $0.column) < ($1.row, $1.column) }
@@ -698,6 +673,7 @@ enum FriendlyRefillPipeline {
         let slots = grid.emptyPositions()
         guard let decision = controller.selectFriendlyRefillTarget(
             previousResolvedGroupCount: previousResolution.comboCount,
+            removedOrbCount: previousResolution.removedOrbCount,
             emptySlotCount: slots.count,
             roll: roll
         ) else { preconditionFailure("Friendly preparation called in ON mode") }
