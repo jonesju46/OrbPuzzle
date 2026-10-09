@@ -75,6 +75,86 @@ final class OrbGrid {
         }
     }
 
+    /// Count-only upper bound; does not imply a reachable layout or timed solution.
+    static func theoreticalMaxCombo(for counts: [OrbType: Int]) -> Int {
+        OrbType.allCases.reduce(0) { $0 + max(0, counts[$1, default: 0]) / 3 }
+    }
+
+    var theoreticalMaxCombo: Int {
+        let counts = cells.flatMap { $0 }.compactMap { $0 }.reduce(into: [OrbType: Int]()) {
+            $0[$1.type, default: 0] += 1
+        }
+        return Self.theoreticalMaxCombo(for: counts)
+    }
+
+    // Enumerated once. All ordered quotas are equally eligible, so no color
+    // receives a preferred count. Every quota totals 30 with 3...7 of each color.
+    private static let initialQuotas: [Int: [[Int]]] = {
+        var result: [Int: [[Int]]] = [:]
+        func visit(_ counts: [Int], _ total: Int) {
+            if counts.count == OrbType.allCases.count {
+                guard total == defaultRows * defaultColumns else { return }
+                let potential = counts.reduce(0) { $0 + $1 / 3 }
+                if potential >= 8 { result[potential, default: []].append(counts) }
+                return
+            }
+            for count in 3...7 where total + count <= defaultRows * defaultColumns {
+                visit(counts + [count], total + count)
+            }
+        }
+        visit([], 0)
+        return result
+    }()
+
+    func fillBalancedInitialBoard() {
+        var generator = SystemRandomNumberGenerator()
+        fillBalancedInitialBoard(using: &generator)
+    }
+
+    /// Initial generation only. Refill continues to use the existing algorithms.
+    func fillBalancedInitialBoard<R: RandomNumberGenerator>(
+        maxRetries: Int = 200,
+        using generator: inout R
+    ) {
+        precondition(rows == Self.defaultRows && columns == Self.defaultColumns)
+        let roll = Int.random(in: 0..<100, using: &generator)
+        let target = roll < 40 ? 8 : (roll < 85 ? 9 : 10)
+        guard let quota = Self.initialQuotas[target]?.randomElement(using: &generator)
+        else { preconditionFailure("Missing initial-board quota") }
+        let bag = zip(OrbType.allCases, quota).flatMap { type, count in
+            Array(repeating: type, count: count)
+        }
+        func assign(_ types: [OrbType]) {
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    cells[row][column] = Orb(type: types[row * columns + column])
+                }
+            }
+        }
+        let detector = MatchDetector()
+        for _ in 0..<max(0, maxRetries) {
+            assign(bag.shuffled(using: &generator))
+            if detector.detect(in: self).isEmpty { return }
+        }
+
+        // Bounded emergency fallback: verified match-free 10-potential layout.
+        // Random color permutation and reflections keep all colors symmetric.
+        let palette = OrbType.allCases.shuffled(using: &generator)
+        let layout = [
+            [4, 2, 1, 1, 3, 0], [0, 5, 1, 3, 1, 5],
+            [2, 2, 0, 3, 3, 1], [2, 3, 2, 2, 0, 1], [0, 4, 4, 5, 3, 0]
+        ]
+        let flipRows = Bool.random(using: &generator)
+        let flipColumns = Bool.random(using: &generator)
+        assign((0..<rows).flatMap { row in
+            (0..<columns).map { column in
+                palette[layout[flipRows ? rows - 1 - row : row]
+                    [flipColumns ? columns - 1 - column : column]]
+            }
+        })
+        assert(detector.detect(in: self).isEmpty)
+    }
+
     func remove(_ positions: Set<GridPosition>) -> [Orb] {
         var removed: [Orb] = []
         for position in positions where contains(position) {

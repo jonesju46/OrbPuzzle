@@ -148,7 +148,7 @@ final class GameScene: SKScene {
         playerFeedbackLabel.text = nil
         playerFeedbackLabel.alpha = 0
 
-        grid.fillAvoidingInitialMatches { OrbType.allCases.randomElement() ?? .fire }
+        grid.fillBalancedInitialBoard()
         layoutAllOrbs(rebuild: true)
         gameState = .idle
         updateTimerUI()

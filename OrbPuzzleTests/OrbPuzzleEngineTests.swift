@@ -3,6 +3,84 @@ import XCTest
 @testable import OrbPuzzle
 
 final class OrbPuzzleEngineTests: XCTestCase {
+    func testTheoreticalMaxComboUsesPerColorTriples() {
+        let counts = Dictionary(uniqueKeysWithValues: zip(OrbType.allCases, [6, 6, 6, 3, 3, 6]))
+        XCTAssertEqual(OrbGrid.theoreticalMaxCombo(for: counts), 10)
+        XCTAssertEqual(OrbGrid.theoreticalMaxCombo(for: [:]), 0)
+        XCTAssertEqual(OrbGrid.theoreticalMaxCombo(for:
+            Dictionary(uniqueKeysWithValues: OrbType.allCases.map { ($0, 5) })), 6)
+    }
+
+    func testBalancedInitialBoardTenThousandDeterministicBoards() {
+        var generator = SeededGenerator(seed: 20_261_009)
+        var histogram: [Int: Int] = [:]
+        var colorTotals: [OrbType: Int] = [:]
+        var colorHistograms: [OrbType: [Int: Int]] = [:]
+        for _ in 0..<10_000 {
+            let grid = OrbGrid()
+            grid.fillBalancedInitialBoard(using: &generator)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+            XCTAssertTrue(MatchDetector().detect(in: grid).isEmpty)
+            let counts = grid.cells.flatMap { $0 }.compactMap { $0 }
+                .reduce(into: [OrbType: Int]()) { $0[$1.type, default: 0] += 1 }
+            for type in OrbType.allCases {
+                let count = counts[type, default: 0]
+                XCTAssertTrue((3...7).contains(count))
+                colorTotals[type, default: 0] += count
+                colorHistograms[type, default: [:]][count, default: 0] += 1
+            }
+            XCTAssertTrue((8...10).contains(grid.theoreticalMaxCombo))
+            histogram[grid.theoreticalMaxCombo, default: 0] += 1
+        }
+        XCTAssertTrue((3_700...4_300).contains(histogram[8, default: 0]))
+        XCTAssertTrue((4_200...4_800).contains(histogram[9, default: 0]))
+        XCTAssertTrue((1_200...1_800).contains(histogram[10, default: 0]))
+        for total in colorTotals.values {
+            XCTAssertLessThan(abs(Double(total) / 10_000 - 5), 0.10)
+        }
+        print("Initial potential histogram: \(histogram)")
+        print("Initial color count histograms: \(colorHistograms)")
+    }
+
+    func testLegacyInitialBoardDeterministicDistributionForComparison() {
+        var generator = SeededGenerator(seed: 20_261_009)
+        var histogram: [Int: Int] = [:]
+        for _ in 0..<10_000 {
+            let grid = OrbGrid()
+            grid.fillAvoidingInitialMatches {
+                OrbType.allCases.randomElement(using: &generator) ?? .fire
+            }
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(MatchDetector().detect(in: grid).isEmpty)
+            histogram[grid.theoreticalMaxCombo, default: 0] += 1
+        }
+        print("Legacy initial potential histogram: \(histogram)")
+    }
+
+    func testBalancedInitialBoardEmergencyFallbackIsFullAndMatchFree() {
+        var generator = SeededGenerator(seed: 998)
+        for _ in 0..<100 {
+            let grid = OrbGrid()
+            grid.fillBalancedInitialBoard(maxRetries: 0, using: &generator)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(MatchDetector().detect(in: grid).isEmpty)
+            XCTAssertEqual(grid.theoreticalMaxCombo, 10)
+        }
+    }
+
+    func testBalancedInitialBoardSeedIsReproducible() {
+        var first = SeededGenerator(seed: 123)
+        var second = SeededGenerator(seed: 123)
+        for _ in 0..<100 {
+            let lhs = OrbGrid()
+            let rhs = OrbGrid()
+            lhs.fillBalancedInitialBoard(using: &first)
+            rhs.fillBalancedInitialBoard(using: &second)
+            XCTAssertEqual(lhs.cells.map { $0.map { $0?.type } }, rhs.cells.map { $0.map { $0?.type } })
+        }
+    }
+
     func testIdleTimerPolicyDisablesOnlyForActiveScene() {
         XCTAssertTrue(AppIdleTimerPolicy.shouldDisableIdleTimer(for: .active))
         XCTAssertFalse(AppIdleTimerPolicy.shouldDisableIdleTimer(for: .inactive))
