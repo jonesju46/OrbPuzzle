@@ -10,6 +10,7 @@ final class GameScene: SKScene {
     private let skyfallController = SkyfallController()
     private var sessionStatistics = SessionStatistics()
     private var battleSession = BattleSession(config: .default)
+    private var lastDisplayedAttack = 0
     private lazy var turnController = TurnController(duration: GameSettings.effectiveTurnDuration(
         enabled: GameSettings.defaultTurnTimeEnabled,
         configured: GameSettings.defaultTurnDuration
@@ -31,6 +32,7 @@ final class GameScene: SKScene {
     private let monsterHPTrack = SKShapeNode()
     private let monsterHPFill = SKSpriteNode(color: .systemRed, size: .zero)
     private let playerHPLabel = SKLabelNode(fontNamed: "AvenirNext-DemiBold")
+    private let playerAttackLabel = SKLabelNode(fontNamed: "Menlo-Bold")
     private let playerHPTrack = SKShapeNode()
     private let playerHPFill = SKSpriteNode(color: .systemGreen, size: .zero)
     private let monsterDamageLabel = SKLabelNode(fontNamed: "AvenirNext-Bold")
@@ -139,6 +141,7 @@ final class GameScene: SKScene {
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
         sessionStatistics.reset()
         battleSession = BattleSession(config: battleConfig)
+        lastDisplayedAttack = 0
         turnController.resetSession()
         comboLabel.text = "Combo 0"
         comboLabel.alpha = 1
@@ -263,6 +266,13 @@ final class GameScene: SKScene {
         battleStatusLabel.fontSize = 11
         battleStatusLabel.horizontalAlignmentMode = .center
         playerHPLabel.fontSize = 11
+        playerAttackLabel.fontSize = 11
+        playerAttackLabel.fontColor = .white
+        playerAttackLabel.horizontalAlignmentMode = .right
+        playerAttackLabel.verticalAlignmentMode = .center
+        playerAttackLabel.zPosition = 3
+        playerAttackLabel.text = "ATK 0"
+        addChild(playerAttackLabel)
 
         for track in [monsterHPTrack, playerHPTrack] {
             track.fillColor = SKColor.white.withAlphaComponent(0.16)
@@ -283,6 +293,7 @@ final class GameScene: SKScene {
         addChild(monsterDamageLabel)
         playerFeedbackLabel.fontSize = 12
         playerFeedbackLabel.horizontalAlignmentMode = .right
+        playerFeedbackLabel.verticalAlignmentMode = .center
         playerFeedbackLabel.zPosition = 20
         addChild(playerFeedbackLabel)
 
@@ -392,7 +403,9 @@ final class GameScene: SKScene {
         // 31-point offset placed the bar directly through the Combo glyphs.
         let playerLabelY = headerY + 49
         playerHPLabel.position = CGPoint(x: horizontalMargin, y: playerLabelY)
-        playerFeedbackLabel.position = CGPoint(x: horizontalMargin + boardWidth, y: playerLabelY)
+        playerAttackLabel.position = CGPoint(x: horizontalMargin + boardWidth, y: playerLabelY)
+        // Keep transient heal/damage feedback clear of the persistent ATK row.
+        playerFeedbackLabel.position = CGPoint(x: horizontalMargin + boardWidth, y: playerLabelY + 15)
         playerHPBarFrame = CGRect(
             x: horizontalMargin,
             y: playerLabelY - 21,
@@ -467,6 +480,8 @@ final class GameScene: SKScene {
         monsterHPLabel.text = "HP \(state.monsterCurrentHP) / \(state.monsterMaxHP)"
         monsterCDLabel.text = "CD \(state.monsterCurrentCD)"
         playerHPLabel.text = "Player HP \(state.playerCurrentHP) / \(state.playerMaxHP)"
+        playerAttackLabel.text = "ATK \(lastDisplayedAttack)"
+        fitPlayerHPRow()
         switch state.outcome {
         case .active:
             battleStatusLabel.text = nil
@@ -492,6 +507,21 @@ final class GameScene: SKScene {
             width: playerHPBarFrame.width * min(max(playerRatio, 0), 1),
             height: playerHPBarFrame.height
         )
+    }
+
+    private func fitPlayerHPRow() {
+        guard playerHPBarFrame.width > 0 else { return }
+        // Separate width budgets preserve an eight-point gap even for long values.
+        let availableWidth = max(0, playerHPBarFrame.width - 8)
+        for (label, width) in [
+            (playerHPLabel, availableWidth * 0.60),
+            (playerAttackLabel, availableWidth * 0.40)
+        ] {
+            label.setScale(1)
+            if label.frame.width > width {
+                label.setScale(width / label.frame.width)
+            }
+        }
     }
 
     private func showBattleFeedback(_ result: BattleTurnResult) {
@@ -1073,6 +1103,7 @@ final class GameScene: SKScene {
             let battleResult = battleSession.resolveTurn(
                 comboByType: comboController.comboTotalByType
             )
+            lastDisplayedAttack = battleResult.totalMonsterDamage
             updateBattleUI()
             showBattleFeedback(battleResult)
             sessionStatistics.commitCompletedTurn(
