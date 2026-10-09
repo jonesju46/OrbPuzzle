@@ -240,7 +240,7 @@ final class GameScene: SKScene {
             addChild(label)
             orbTypeDebugLabels.append(label)
         }
-        for _ in 0..<9 {
+        for _ in 0..<7 {
             let label = SKLabelNode(fontNamed: "Menlo")
             label.fontSize = 10
             label.fontColor = .systemYellow
@@ -389,7 +389,7 @@ final class GameScene: SKScene {
 
 #if DEBUG
         // Fit the diagnostic rows below the board, without moving gameplay UI.
-        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 196))
+        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 172))
         for (index, label) in debugLabels.enumerated() {
             label.fontSize = 10 * debugScale
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
@@ -1275,13 +1275,12 @@ final class GameScene: SKScene {
 
 #if DEBUG
     private func updateFriendlyDebugHUD() {
-        guard friendlyDebugLabels.count == 9 else { return }
+        guard friendlyDebugLabels.count == 7 else { return }
         let preparation = friendlyDebugPreparation
         let decision = preparation?.decision
         let attempt = decision?.rolls.last
         let rollText = attempt.map { String(format: "%.3f / %.3f", $0.roll, $0.probability) } ?? "-"
         let target = decision?.selectedTarget ?? 0
-        let stats = friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
         let texts = [
             "FRIENDLY (latest refill)",
             "PrevGroups: \(decision?.previousResolvedGroupCount.description ?? "-") Removed: \(preparation?.removedOrbCount.description ?? "-")",
@@ -1289,9 +1288,7 @@ final class GameScene: SKScene {
             "Roll: \(rollText) Selected: \(target)",
             "Planned: \(preparation?.plan?.plannedTarget.description ?? "-") Direct: \(preparation?.directGroupCount.description ?? "-")",
             "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Mode: \(preparation?.refillMode ?? "-")",
-            "Fallback: \(preparation?.fallbackReason ?? "-")",
-            "Target \(target): Attempts \(stats.attempts) PlannedExact \(stats.plannedExact)",
-            "DetectedExactOrMore: \(stats.detectedExactOrMore)"
+            "Fallback: \(preparation?.fallbackReason ?? "-")"
         ]
         for (label, text) in zip(friendlyDebugLabels, texts) {
             label.text = text

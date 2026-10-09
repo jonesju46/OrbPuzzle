@@ -695,6 +695,30 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
+    func testFriendlyThreeOrbGroupsOneThroughThirtyAlwaysUseSingleFiftyPercentRoll() {
+        // 1...10 is the current 30-orb runtime range. 11...30 checks the generic
+        // policy only; it does not claim the current board can hold those groups.
+        for groups in 1...30 {
+            for value in [0.499, 0.500, 0.900] {
+                var calls = 0
+                let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                    previousResolvedGroupCount: groups,
+                    removedOrbCount: groups * 3, emptySlotCount: groups * 3,
+                    roll: { capacity in
+                        calls += 1
+                        XCTAssertEqual(capacity, groups)
+                        return value
+                    }
+                )
+                XCTAssertEqual(calls, 1)
+                XCTAssertEqual(decision.capacityTarget, groups)
+                XCTAssertEqual(decision.rolls.count, 1)
+                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
+                XCTAssertEqual(decision.selectedTarget, value < 0.50 ? groups : 0)
+            }
+        }
+    }
+
     func testFriendlyTargetIsIndependentOfPreviousGroupCount() {
         for removed in [6, 30] {
             for previous in [1, 2, 3, 6, 10] {
