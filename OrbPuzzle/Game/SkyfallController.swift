@@ -234,7 +234,7 @@ final class SkyfallController {
             FriendlyNaturalSkyfallPolicy.maximumGroupCount
         )
         guard maximumGroupCount > 0,
-              let types = makeMatchProducingRefill(
+              let types = makeFriendlyMatchProducingRefill(
             grid: grid,
             refillSlots: refillSlots,
             maximumGroupCount: maximumGroupCount,
@@ -245,6 +245,66 @@ final class SkyfallController {
         ).count
         guard plannedTarget > 0 else { return nil }
         return FriendlyRefillPlan(types: types, plannedTarget: plannedTarget)
+    }
+
+    /// Friendly OFF mode must not depend on finding three collinear NEW slots
+    /// or on a random full-board assignment happening to complete a match.
+    /// Enumerate compatible runs, including runs completed by preserved orbs.
+    /// Force their new slots before safe-filling every remaining actual vacancy.
+    private func makeFriendlyMatchProducingRefill<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        refillSlots: [GridPosition],
+        maximumGroupCount: Int,
+        using generator: inout R
+    ) -> [OrbType]? {
+        // Retain the existing multi-group search, without changing ON planning.
+        if maximumGroupCount > 1,
+           let types = makeMatchProducingRefill(
+            grid: grid,
+            refillSlots: refillSlots,
+            maximumGroupCount: maximumGroupCount,
+            using: &generator
+           ) { return types }
+
+        let empty = Set(refillSlots)
+        var runs: [[GridPosition]] = []
+        for row in 0..<grid.rows {
+            for column in 0..<grid.columns {
+                if column + 2 < grid.columns {
+                    runs.append((0..<3).map { GridPosition(row: row, column: column + $0) })
+                }
+                if row + 2 < grid.rows {
+                    runs.append((0..<3).map { GridPosition(row: row + $0, column: column) })
+                }
+            }
+        }
+        for run in runs.shuffled(using: &generator) {
+            let newSlots = run.filter { empty.contains($0) }
+            guard !newSlots.isEmpty else { continue }
+            for type in OrbType.allCases.shuffled(using: &generator) {
+                guard run.allSatisfy({ empty.contains($0) || grid.orb(at: $0)?.type == type })
+                else { continue }
+                let forced = Dictionary(uniqueKeysWithValues: newSlots.map { ($0, type) })
+                guard let types = planTypes(
+                    grid: grid,
+                    refillSlots: refillSlots,
+                    forcedTypes: forced,
+                    using: &generator
+                ) else { continue }
+                // Extra slots never overwrite the forced run. Validate the
+                // complete board, not assignment/spawn counts alone.
+                let score = planScore(
+                    grid: grid,
+                    refillSlots: refillSlots,
+                    types: types,
+                    maximumGroupCount: maximumGroupCount
+                )
+                if score.groups > 0 { return types }
+            }
+        }
+        // No compatible assignment passed full-board validation: the caller
+        // still fills all slots through makeNonForcedRefill. Never fabricate success.
+        return nil
     }
 
     private func makeMatchProducingRefill<R: RandomNumberGenerator>(

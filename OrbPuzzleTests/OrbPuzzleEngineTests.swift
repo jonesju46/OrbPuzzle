@@ -747,11 +747,79 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
         let spawns = grid.refill(types: plan.types, at: slots)
 
+        XCTAssertEqual(MatchDetector().detect(in: grid).count, 1)
         XCTAssertEqual(slots.count, 5)
         XCTAssertEqual(plan.types.count, 5)
         XCTAssertEqual(spawns.count, 5)
         XCTAssertEqual(grid.emptyPositions().count, 0)
         XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testForcedFriendlyTargetOneDetectsRealMatchForThreeThroughSixSlots() {
+        for count in 3...6 {
+            for seed in 0..<32 {
+                var generator = SeededGenerator(seed: UInt64(2_000 + count * 100 + seed))
+                let grid = OrbGrid(types: boardWithHorizontalMatch(length: count))
+                let removed = ResolveResult(matches: MatchDetector().detect(in: grid))
+                XCTAssertEqual(removed.comboCount, 1)
+                XCTAssertEqual(removed.removedOrbCount, count)
+                _ = grid.remove(removed.removedPositions)
+                _ = grid.collapse()
+                let slots = grid.emptyPositions()
+                let preserved = Dictionary(uniqueKeysWithValues: grid.cells.flatMap { $0 }
+                    .compactMap { $0 }.map { ($0.id, $0.type) })
+                let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
+                    previousResolvedGroupCount: 1,
+                    emptySlotCount: slots.count,
+                    roll: { _ in 0.49 }
+                )
+                XCTAssertEqual(decision.selectedTarget, 1)
+                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
+                guard let plan = SkyfallController().makeFriendlyNaturalRefill(
+                    grid: grid, refillSlots: slots, targetGroupCount: 1, using: &generator
+                ) else {
+                    XCTFail("Friendly planner failed slots=\(count) seed=\(seed)")
+                    continue
+                }
+                XCTAssertEqual(grid.refill(types: plan.types, at: slots).count, count)
+                let detected = MatchDetector().detect(in: grid)
+                XCTAssertEqual(detected.count, 1, "slots=\(count) seed=\(seed)")
+                XCTAssertEqual(plan.plannedTarget, detected.count)
+                XCTAssertTrue(grid.emptyPositions().isEmpty)
+                XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+                let after = Dictionary(uniqueKeysWithValues: grid.cells.flatMap { $0 }
+                    .compactMap { $0 }.filter { preserved[$0.id] != nil }.map { ($0.id, $0.type) })
+                XCTAssertEqual(after, preserved)
+            }
+        }
+    }
+
+    func testFriendlyTargetOneCompletesPreservedRunWithoutThreeCollinearNewSlots() {
+        for count in 3...6 {
+            var board = stableBoardTypes()
+            board[4][0] = .heart
+            board[4][1] = .heart
+            board[3][2] = .water
+            let grid = OrbGrid(types: board)
+            let positions = Set([
+                GridPosition(row: 4, column: 2), GridPosition(row: 4, column: 4),
+                GridPosition(row: 3, column: 5), GridPosition(row: 2, column: 0),
+                GridPosition(row: 1, column: 3), GridPosition(row: 0, column: 5)
+            ].prefix(count))
+            _ = grid.remove(positions)
+            var generator = SeededGenerator(seed: UInt64(3_000 + count))
+            let slots = grid.emptyPositions()
+            guard let plan = SkyfallController().makeFriendlyNaturalRefill(
+                grid: grid, refillSlots: slots, targetGroupCount: 1, using: &generator
+            ) else {
+                XCTFail("Expected compatible preserved-orb run for \(count) vacancies")
+                continue
+            }
+            _ = grid.refill(types: plan.types, at: slots)
+            XCTAssertGreaterThanOrEqual(MatchDetector().detect(in: grid).count, 1)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        }
     }
 
     func testNormalizedFiveOrbShapesRefillFiveSlotsAtZeroTarget() {
