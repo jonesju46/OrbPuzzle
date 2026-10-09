@@ -47,6 +47,11 @@ final class GameScene: SKScene {
     private var orbNodes: [UUID: OrbNode] = [:]
     private var debugLabels: [SKLabelNode] = []
     private var orbTypeDebugLabels: [SKLabelNode] = []
+#if DEBUG
+    private var friendlyDebugLabels: [SKLabelNode] = []
+    private var friendlyDebugPreparation: FriendlyRefillPreparation?
+    private var friendlyDebugDetectedGroups: Int?
+#endif
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
     private var gameState: GameState = .idle {
@@ -142,6 +147,11 @@ final class GameScene: SKScene {
         sessionStatistics.reset()
         battleSession = BattleSession(config: battleConfig)
         lastDisplayedAttack = 0
+#if DEBUG
+        friendlyDebugPreparation = nil
+        friendlyDebugDetectedGroups = nil
+        updateFriendlyDebugHUD()
+#endif
         turnController.resetSession()
         comboLabel.text = "Combo 0"
         comboLabel.alpha = 1
@@ -227,6 +237,16 @@ final class GameScene: SKScene {
             addChild(label)
             orbTypeDebugLabels.append(label)
         }
+        for _ in 0..<5 {
+            let label = SKLabelNode(fontNamed: "Menlo")
+            label.fontSize = 10
+            label.fontColor = .systemYellow
+            label.horizontalAlignmentMode = .left
+            label.zPosition = 100
+            addChild(label)
+            friendlyDebugLabels.append(label)
+        }
+        updateFriendlyDebugHUD()
 #endif
         layoutInterface()
         updateTimerUI()
@@ -365,15 +385,24 @@ final class GameScene: SKScene {
         layoutBattleInterface(horizontalMargin: horizontalMargin, boardWidth: boardWidth)
 
 #if DEBUG
+        // Fit the diagnostic rows below the board, without moving gameplay UI.
+        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 148))
         for (index, label) in debugLabels.enumerated() {
-            label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - 18 - CGFloat(index) * 12)
+            label.fontSize = 10 * debugScale
+            label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
         }
         // Leave enough room for the split manual/skyfall averages in the
         // left COMBO line while keeping the six shorter type rows visible.
         let rightColumnX = horizontalMargin + boardWidth * 0.55
         for (index, label) in orbTypeDebugLabels.enumerated() {
-            label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - 18 - CGFloat(index) * 12)
+            label.fontSize = 10 * debugScale
+            label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
         }
+        for (index, label) in friendlyDebugLabels.enumerated() {
+            label.fontSize = 10 * debugScale
+            label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (94 + CGFloat(index) * 12) * debugScale)
+        }
+        updateFriendlyDebugHUD()
 #endif
     }
 
@@ -719,6 +748,11 @@ final class GameScene: SKScene {
         gameState = .resolving
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
         let initialMatches = matchDetector.detect(in: grid)
+#if DEBUG
+        if initialMatches.isEmpty {
+            print("[MANUAL_RESOLVE] resolveID=\(resolveID) groupCount=0 groupSizes=[] removedPositions=[] removedCount=0")
+        }
+#endif
         guard !initialMatches.isEmpty else {
             finishResolution(resolveID: resolveID)
             return
@@ -732,6 +766,10 @@ final class GameScene: SKScene {
             return
         }
         let resolveResult = ResolveResult(matches: matches)
+#if DEBUG
+        let traceTag = source == .manual ? "MANUAL_RESOLVE" : "SKYFALL_RESOLVE"
+        print("[\(traceTag)] resolveID=\(resolveID) groupCount=\(resolveResult.comboCount) groupSizes=\(matches.map { $0.positions.count }) removedPositions=\(FriendlyRefillPipeline.describe(Array(resolveResult.removedPositions))) removedCount=\(resolveResult.removedOrbCount)")
+#endif
         execute(
             resolveResult.steps,
             at: 0,
@@ -798,7 +836,8 @@ final class GameScene: SKScene {
 
         case let .gravity(expectedRemovedOrbCount: expectedRemovedOrbCount):
 #if DEBUG
-            let emptyCount = grid.emptyPositions().count
+            let emptyPositionsBefore = grid.emptyPositions()
+            let emptyCount = emptyPositionsBefore.count
             if emptyCount != expectedRemovedOrbCount {
                 print("[RESOLVE-BUG] gravity expected=\(expectedRemovedOrbCount) empty=\(emptyCount)")
             }
@@ -812,6 +851,10 @@ final class GameScene: SKScene {
                 nodes: orbNodes,
                 pointForPosition: { self.point(for: $0) }
             )
+#if DEBUG
+            let emptyPositionsAfterCollapse = grid.emptyPositions()
+            print("[GRAVITY] resolveID=\(resolveID) emptyPositionsBefore=\(FriendlyRefillPipeline.describe(emptyPositionsBefore)) emptyPositionsAfterCollapse=\(FriendlyRefillPipeline.describe(emptyPositionsAfterCollapse)) emptyCount=\(emptyPositionsAfterCollapse.count)")
+#endif
             run(after: fallDuration) { [weak self] in
                 guard let self else { return }
                 guard resolveID == self.activeResolveID,
@@ -832,7 +875,7 @@ final class GameScene: SKScene {
         case let .refill(expectedRefillCount: expectedRefillCount):
             refillAndContinue(
                 expectedRefillCount: expectedRefillCount,
-                previousResolvedGroupCount: result.comboCount,
+                previousResolution: result,
                 resolveID: resolveID
             )
         }
@@ -867,7 +910,7 @@ final class GameScene: SKScene {
 
     private func refillAndContinue(
         expectedRefillCount: Int,
-        previousResolvedGroupCount: Int,
+        previousResolution: ResolveResult,
         resolveID: UInt
     ) {
         guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
@@ -897,22 +940,12 @@ final class GameScene: SKScene {
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : nil
         let isControlledSkyfallRefill = controlledTypes != nil
-        let friendlyDecision = skyfallController.selectFriendlyRefillTarget(
-            previousResolvedGroupCount: previousResolvedGroupCount,
-            emptySlotCount: refillSlots.count
-        )
-        let friendlyPlan: FriendlyRefillPlan?
-        if let selectedTarget = friendlyDecision?.selectedTarget,
-           selectedTarget > 0 {
-            friendlyPlan = skyfallController.makeFriendlyNaturalRefill(
-                grid: grid,
-                refillSlots: refillSlots,
-                targetGroupCount: selectedTarget
+        let friendlyPreparation = skyfallController.hasControlledTarget ? nil
+            : FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: previousResolution, controller: skyfallController
             )
-        } else {
-            friendlyPlan = nil
-        }
-        let isFriendlyNaturalRefill = friendlyPlan != nil
+        let friendlyDecision = friendlyPreparation?.decision
+        let isFriendlyNaturalRefill = friendlyPreparation?.usesFriendlyTypes == true
         let isSafeRefill = !isControlledSkyfallRefill && !isFriendlyNaturalRefill
 
 #if DEBUG
@@ -923,16 +956,10 @@ final class GameScene: SKScene {
         } else {
             print("[REFILL] safe final begin slots=\(refillSlots.count)")
         }
-        if let friendlyDecision {
-            print("[FRIENDLY_REFILL] previousGroups=\(friendlyDecision.previousResolvedGroupCount) emptySlots=\(friendlyDecision.emptySlotCount) physicalMax=\(friendlyDecision.physicalMaxGroups) candidateMax=\(friendlyDecision.candidateMaxGroups)")
-            for attempt in friendlyDecision.rolls {
-                print(String(format: "[FRIENDLY_REFILL] roll%d=%.4f probability=%.2f success=%@", attempt.groupCount, attempt.roll, attempt.probability, attempt.succeeded.description))
-            }
-            print("[FRIENDLY_REFILL] selectedTarget=\(friendlyDecision.selectedTarget) plannedTarget=\(friendlyPlan?.plannedTarget.description ?? "none") actualResolved=\(previousResolvedGroupCount)")
-            if friendlyDecision.selectedTarget == 0 {
-                print("[FRIENDLY_REFILL] selectedTarget=0 friendlyStopped=true")
-            }
-        }
+        friendlyPreparation?.logDebug(resolveID: resolveID)
+        friendlyDebugPreparation = friendlyPreparation
+        friendlyDebugDetectedGroups = nil
+        updateFriendlyDebugHUD()
 #endif
         var plannedTypes: [OrbType]?
         if skyfallController.hasControlledTarget {
@@ -940,15 +967,10 @@ final class GameScene: SKScene {
             // total reaches it, safe refill prevents an active target + 1 group.
             plannedTypes = controlledTypes
                 ?? skyfallController.makeSafeRefill(grid: grid, refillSlots: refillSlots)
-        } else if let friendlyPlan {
-            plannedTypes = friendlyPlan.types
         } else {
-            // A zero target, insufficient slots, or a planning failure uses
-            // non-forced refill. Existing natural matches remain detectable.
-            plannedTypes = skyfallController.makeNonForcedRefill(
-                grid: grid,
-                refillSlots: refillSlots
-            )
+            // The same preparation is consumed by RefillController and shape
+            // tests. No second roll or safe assignment may replace a valid plan.
+            plannedTypes = friendlyPreparation?.types
         }
         if !skyfallController.hasControlledTarget,
            plannedTypes?.count != refillSlots.count {
@@ -970,11 +992,11 @@ final class GameScene: SKScene {
 #if DEBUG
         let refillMode = isControlledSkyfallRefill
             ? "controlled"
-            : (isFriendlyNaturalRefill ? "friendly-natural" : "safe")
+            : (friendlyPreparation?.refillMode ?? "safe")
         let typeSummary = OrbType.allCases.map { type in
             "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
         }.joined(separator: " ")
-        print("[REFILL] mode=\(refillMode) count=\(plannedTypes.count) \(typeSummary)")
+        print("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) assignmentCount=\(plannedTypes.count) \(typeSummary)")
 #endif
 
         let preservedCount = orbNodes.count
@@ -986,7 +1008,8 @@ final class GameScene: SKScene {
             cellSize: cellSize,
             pointForPosition: { [weak self] position in
                 self?.point(for: position) ?? .zero
-            }
+            },
+            friendlyPreparation: friendlyPreparation
         )
 #if DEBUG
         if result.spawns.count != expectedRefillCount {
@@ -998,7 +1021,7 @@ final class GameScene: SKScene {
         let emptyAfter = grid.emptyPositions().count
         let occupiedAfter = grid.cells.flatMap { $0 }.compactMap { $0 }.count
         let selectedTargetDescription = friendlyDecision.map { String($0.selectedTarget) } ?? "n/a"
-        print("[REFILL] removedOrbs=\(expectedRefillCount) emptyBefore=\(refillSlots.count) selectedTarget=\(selectedTargetDescription) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
+        print("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) removedOrbs=\(expectedRefillCount) emptyBefore=\(refillSlots.count) selectedTarget=\(selectedTargetDescription) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
         if plannedTypes.count != refillSlots.count
             || result.spawns.count != refillSlots.count
             || emptyAfter != 0
@@ -1014,8 +1037,17 @@ final class GameScene: SKScene {
                 self.logStaleCompletion("refill animation")
                 return
             }
-            let stableBoard = StableBoardScan(matches: self.matchDetector.detect(in: self.grid))
+            let stableBoard = friendlyPreparation != nil
+                ? FriendlyRefillPipeline.scan(in: self.grid)
+                : StableBoardScan(matches: self.matchDetector.detect(in: self.grid))
             let matches = stableBoard.matches
+#if DEBUG
+            print("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
+            if friendlyPreparation != nil {
+                self.friendlyDebugDetectedGroups = matches.count
+                self.updateFriendlyDebugHUD()
+            }
+#endif
 
             if isControlledSkyfallRefill || isFriendlyNaturalRefill {
                 guard self.resolveLifecycle.acceptsSkyfallCompletion else {
@@ -1216,6 +1248,30 @@ final class GameScene: SKScene {
         comboLabel.setScale(1)
         updateDebugOverlay()
     }
+
+#if DEBUG
+    private func updateFriendlyDebugHUD() {
+        guard friendlyDebugLabels.count == 5 else { return }
+        let preparation = friendlyDebugPreparation
+        let decision = preparation?.decision
+        let attempt = decision?.rolls.last
+        let rollText = attempt.map { String(format: "%.2f / %.2f", $0.roll, $0.probability) } ?? "-"
+        let texts = [
+            "FRIENDLY (latest refill)",
+            "Prev: \(decision?.previousResolvedGroupCount.description ?? "-") Slots: \(decision?.emptySlotCount.description ?? "-")",
+            "Roll: \(rollText) Target: \(decision?.selectedTarget.description ?? "-")",
+            "Plan: \(preparation?.plan?.plannedTarget.description ?? "-") Mode: \(preparation?.refillMode ?? "-")",
+            "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Fallback: \(preparation?.fallbackReason ?? "none")"
+        ]
+        for (label, text) in zip(friendlyDebugLabels, texts) {
+            label.text = text
+            label.xScale = 1
+            if label.frame.width > boardFrame.width, boardFrame.width > 0 {
+                label.xScale = boardFrame.width / label.frame.width
+            }
+        }
+    }
+#endif
 
     private func updateDebugOverlay() {
 #if DEBUG

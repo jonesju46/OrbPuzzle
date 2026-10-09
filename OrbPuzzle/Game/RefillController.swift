@@ -7,9 +7,17 @@ final class RefillController {
         types: [OrbType],
         boardNode: SKNode,
         cellSize: CGSize,
-        pointForPosition: (GridPosition) -> CGPoint
+        pointForPosition: (GridPosition) -> CGPoint,
+        friendlyPreparation: FriendlyRefillPreparation? = nil
     ) -> (spawns: [OrbSpawn], nodes: [OrbNode], duration: TimeInterval) {
-        let spawns = grid.refill(types: types, at: slots)
+        let spawns: [OrbSpawn]
+        if let friendlyPreparation {
+            precondition(slots == friendlyPreparation.slots && types == friendlyPreparation.types)
+            spawns = friendlyPreparation.refill(in: grid)
+        } else {
+            // ON mode keeps its existing exact-target refill path.
+            spawns = grid.refill(types: types, at: slots)
+        }
         let nodes = spawns.map { spawn -> OrbNode in
             let node = OrbNode(orb: spawn.orb, diameter: min(cellSize.width, cellSize.height) * 0.82)
             let destination = pointForPosition(spawn.destination)

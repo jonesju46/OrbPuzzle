@@ -1,4 +1,5 @@
 import CoreGraphics
+import SpriteKit
 import XCTest
 @testable import OrbPuzzle
 
@@ -897,6 +898,174 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(MatchDetector().detect(in: grid).count, 1)
             XCTAssertTrue(grid.emptyPositions().isEmpty)
             XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        }
+    }
+
+    func testSceneFriendlyPipelineFullShapeRegressionMatrix() {
+        var cases: [(String, Set<GridPosition>)] = []
+        for length in 3...6 {
+            cases.append(("Horizontal \(length)", Set((0..<length).map {
+                GridPosition(row: 2, column: $0)
+            })))
+        }
+        // A straight Vertical 6 cannot fit a five-row board. Cover 3...5,
+        // plus a legal vertically oriented six-orb connected T below.
+        for length in 3...5 {
+            cases.append(("Vertical \(length)", Set((0..<length).map {
+                GridPosition(row: $0, column: 2)
+            })))
+        }
+        cases.append(("Vertical T 6", Set((0..<4).map {
+            GridPosition(row: $0, column: 2)
+        } + [GridPosition(row: 0, column: 1), GridPosition(row: 0, column: 3)])))
+        cases.append(("L 5", Set((0..<3).map {
+            GridPosition(row: $0, column: 1)
+        } + [GridPosition(row: 0, column: 2), GridPosition(row: 0, column: 3)])))
+        cases.append(("Cross 5", [
+            GridPosition(row: 2, column: 1), GridPosition(row: 2, column: 2),
+            GridPosition(row: 2, column: 3), GridPosition(row: 1, column: 2),
+            GridPosition(row: 3, column: 2)
+        ]))
+        cases.append(("田 9", Set((1...3).flatMap { row in
+            (1...3).map { GridPosition(row: row, column: $0) }
+        })))
+        cases.append(("目 13", Set((0..<5).flatMap { row in
+            (1...3).filter { row % 2 == 0 || $0 == 1 || $0 == 3 }
+                .map { GridPosition(row: row, column: $0) }
+        })))
+
+        for (name, shape) in cases {
+            for seed in 0..<32 {
+                var board = matchTestBoardTypes()
+                for position in shape { board[position.row][position.column] = .heart }
+                let grid = OrbGrid(types: board)
+                let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+                XCTAssertEqual(manual.comboCount, 1, name)
+                XCTAssertEqual(manual.removedPositions, shape, name)
+                XCTAssertEqual(manual.removedOrbCount, shape.count, name)
+                for step in manual.steps {
+                    if case let .remove(phase) = step { _ = grid.remove(phase.removedPositions) }
+                }
+                _ = grid.collapse() // same model operation as GravityController.apply
+                let actualSlots = grid.emptyPositions()
+                let preserved = Dictionary(uniqueKeysWithValues: grid.cells.flatMap { $0 }
+                    .compactMap { $0 }.map { ($0.id, $0.type) })
+                var generator = SeededGenerator(seed: UInt64(9_000 + seed))
+                let preparation = FriendlyRefillPipeline.prepare(
+                    grid: grid, previousResolution: manual, controller: SkyfallController(),
+                    using: &generator, roll: { _ in 0.32 }
+                )
+                XCTAssertEqual(preparation.slots, actualSlots, name)
+                XCTAssertEqual(preparation.decision.previousResolvedGroupCount, 1, name)
+                XCTAssertEqual(preparation.decision.rolls.first?.probability, 0.50, name)
+                XCTAssertEqual(preparation.decision.selectedTarget, 1, name)
+                XCTAssertTrue(preparation.planCalled, name)
+                XCTAssertNotNil(preparation.plan, name)
+                XCTAssertTrue(preparation.usesFriendlyTypes, name)
+                XCTAssertNil(preparation.fallbackReason, name)
+                XCTAssertEqual(preparation.types, preparation.plan?.types, name)
+                // Exercise the actual Scene refill adapter, including plan consumption.
+                let refill = RefillController().refillEmptySlots(
+                    grid: grid, slots: actualSlots, types: preparation.types,
+                    boardNode: SKNode(), cellSize: CGSize(width: 50, height: 50),
+                    pointForPosition: { CGPoint(x: CGFloat($0.column) * 50, y: CGFloat($0.row) * 50) },
+                    friendlyPreparation: preparation
+                )
+                let scan = FriendlyRefillPipeline.scan(in: grid)
+                XCTAssertGreaterThanOrEqual(scan.matches.count, 1, "\(name) seed=\(seed)")
+                XCTAssertEqual(scan.matches.count, preparation.validationDetectedGroups, name)
+                XCTAssertEqual(refill.spawns.count, shape.count, name)
+                XCTAssertEqual(refill.nodes.count, shape.count, name)
+                XCTAssertEqual(allOrbIDs(in: grid).count, 30, name)
+                XCTAssertTrue(grid.emptyPositions().isEmpty, name)
+                let after = Dictionary(uniqueKeysWithValues: grid.cells.flatMap { $0 }
+                    .compactMap { $0 }.filter { preserved[$0.id] != nil }.map { ($0.id, $0.type) })
+                XCTAssertEqual(after, preserved, name)
+                print("[SHAPE_REGRESSION] \(name) seed=\(seed) removed=\(shape.count) target=\(preparation.decision.selectedTarget) plan=\(preparation.plan?.plannedTarget ?? 0) mode=\(preparation.refillMode) detected=\(scan.matches.count)")
+            }
+        }
+    }
+
+    func testSceneFriendlyPipelineUsesValidPlanWithExtraNormalizedGroups() {
+        var board = matchTestBoardTypes()
+        for column in 0..<6 { board[4][column] = .heart }
+        let grid = OrbGrid(types: board)
+        let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+        XCTAssertEqual(manual.comboCount, 1)
+        _ = grid.remove(manual.removedPositions)
+        _ = grid.collapse()
+        var generator = SeededGenerator(seed: 10_001)
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: manual, controller: SkyfallController(),
+            using: &generator, roll: { _ in 0.32 },
+            planProvider: { _, slots, target in
+                XCTAssertEqual(target, 1)
+                XCTAssertEqual(slots.count, 6)
+                // A valid two-group plan must not become a nonForced refill.
+                return FriendlyRefillPlan(types: [.heart, .heart, .heart, .light, .light, .light],
+                                          plannedTarget: 2)
+            }
+        )
+        XCTAssertTrue(preparation.usesFriendlyTypes)
+        XCTAssertEqual(preparation.validationDetectedGroups, 2)
+        XCTAssertNil(preparation.fallbackReason)
+        _ = preparation.refill(in: grid)
+        XCTAssertEqual(FriendlyRefillPipeline.scan(in: grid).matches.count, 2)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testSceneFriendlyPipelineReportsInvalidAssignmentAndZeroMatchPlan() {
+        for malformed in [false, true] {
+            let grid = OrbGrid(types: boardWithHorizontalMatch(length: 4))
+            let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+            _ = grid.remove(manual.removedPositions)
+            _ = grid.collapse()
+            let controller = SkyfallController()
+            var safeGenerator = SeededGenerator(seed: 10_003)
+            guard let safe = controller.makeNonForcedRefill(
+                grid: grid, refillSlots: grid.emptyPositions(), using: &safeGenerator
+            ) else { XCTFail("Missing non-forced fixture"); continue }
+            var generator = SeededGenerator(seed: 10_004)
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: manual, controller: controller,
+                using: &generator, roll: { _ in 0.32 },
+                planProvider: { _, _, _ in
+                    FriendlyRefillPlan(types: malformed ? [] : safe, plannedTarget: 1)
+                }
+            )
+            XCTAssertTrue(preparation.planCalled)
+            XCTAssertNotNil(preparation.plan)
+            XCTAssertFalse(preparation.usesFriendlyTypes)
+            XCTAssertEqual(preparation.fallbackReason,
+                           malformed ? "assignment-count-mismatch" : "full-grid-validation-zero-groups")
+            XCTAssertEqual(preparation.refill(in: grid).count, 4)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+        }
+    }
+
+    func testSceneFriendlyPipelineReportsRollMissAndPlannerFailureSeparately() {
+        for succeeds in [false, true] {
+            let grid = OrbGrid(types: boardWithHorizontalMatch(length: 4))
+            let manual = ResolveResult(matches: MatchDetector().detect(in: grid))
+            _ = grid.remove(manual.removedPositions)
+            _ = grid.collapse()
+            var called = false
+            var generator = SeededGenerator(seed: 10_002)
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: manual, controller: SkyfallController(),
+                using: &generator, roll: { _ in succeeds ? 0.32 : 0.99 },
+                planProvider: { _, _, _ in called = true; return nil }
+            )
+            XCTAssertEqual(called, succeeds)
+            XCTAssertEqual(preparation.planCalled, succeeds)
+            XCTAssertEqual(preparation.decision.selectedTarget, succeeds ? 1 : 0)
+            XCTAssertEqual(preparation.fallbackReason, succeeds ? "planner-returned-nil" : "roll-miss")
+            XCTAssertFalse(preparation.usesFriendlyTypes)
+            XCTAssertEqual(preparation.refillMode, "nonForced")
+            XCTAssertEqual(preparation.refill(in: grid).count, 4)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
         }
     }
 

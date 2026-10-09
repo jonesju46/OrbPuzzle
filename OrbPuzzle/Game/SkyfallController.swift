@@ -19,6 +19,16 @@ struct FriendlyRefillDecision: Equatable, Sendable {
 struct FriendlyRefillPlan: Equatable, Sendable {
     let types: [OrbType]
     let plannedTarget: Int
+    let forcedTypes: [GridPosition: OrbType]
+    let strategy: String
+
+    init(types: [OrbType], plannedTarget: Int,
+         forcedTypes: [GridPosition: OrbType] = [:], strategy: String = "preserved-match") {
+        self.types = types
+        self.plannedTarget = plannedTarget
+        self.forcedTypes = forcedTypes
+        self.strategy = strategy
+    }
 }
 
 enum FriendlyNaturalSkyfallPolicy {
@@ -234,17 +244,22 @@ final class SkyfallController {
             FriendlyNaturalSkyfallPolicy.maximumGroupCount
         )
         guard maximumGroupCount > 0,
-              let types = makeFriendlyMatchProducingRefill(
+              let candidate = makeFriendlyMatchProducingRefill(
             grid: grid,
             refillSlots: refillSlots,
             maximumGroupCount: maximumGroupCount,
             using: &generator
         ) else { return nil }
         let plannedTarget = MatchDetector().detect(
-            in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
+            in: simulatedGrid(grid: grid, slots: refillSlots, types: candidate.types)
         ).count
         guard plannedTarget > 0 else { return nil }
-        return FriendlyRefillPlan(types: types, plannedTarget: plannedTarget)
+        return FriendlyRefillPlan(
+            types: candidate.types,
+            plannedTarget: plannedTarget,
+            forcedTypes: candidate.forcedTypes,
+            strategy: candidate.strategy
+        )
     }
 
     /// Friendly OFF mode must not depend on finding three collinear NEW slots
@@ -256,7 +271,7 @@ final class SkyfallController {
         refillSlots: [GridPosition],
         maximumGroupCount: Int,
         using generator: inout R
-    ) -> [OrbType]? {
+    ) -> (types: [OrbType], forcedTypes: [GridPosition: OrbType], strategy: String)? {
         // Retain the existing multi-group search, without changing ON planning.
         if maximumGroupCount > 1,
            let types = makeMatchProducingRefill(
@@ -264,7 +279,7 @@ final class SkyfallController {
             refillSlots: refillSlots,
             maximumGroupCount: maximumGroupCount,
             using: &generator
-           ) { return types }
+           ) { return (types, [:], "multi-group-search") }
 
         let empty = Set(refillSlots)
         var runs: [[GridPosition]] = []
@@ -293,13 +308,12 @@ final class SkyfallController {
                 ) else { continue }
                 // Extra slots never overwrite the forced run. Validate the
                 // complete board, not assignment/spawn counts alone.
-                let score = planScore(
-                    grid: grid,
-                    refillSlots: refillSlots,
-                    types: types,
-                    maximumGroupCount: maximumGroupCount
+                let matches = MatchDetector().detect(
+                    in: simulatedGrid(grid: grid, slots: refillSlots, types: types)
                 )
-                if score.groups > 0 { return types }
+                // OFF target is desired, not an exact cap. Natural extras must
+                // not discard a real match and send this cycle to safe refill.
+                if !matches.isEmpty { return (types, forced, "compatible-run") }
             }
         }
         // No compatible assignment passed full-board validation: the caller
@@ -604,4 +618,142 @@ final class SkyfallController {
         }
         return OrbGrid(types: completeTypes)
     }
+}
+
+/// The OFF-mode path actually used by GameScene after gravity. Keeping the
+/// decision, assignment and full-board scan together makes shape tests exercise
+/// the caller's path, including fallback, rather than the planner alone.
+struct FriendlyRefillPreparation {
+    let slots: [GridPosition]
+    let decision: FriendlyRefillDecision
+    let planCalled: Bool
+    let plan: FriendlyRefillPlan?
+    let types: [OrbType]
+    let validationDetectedGroups: Int?
+    let usesFriendlyTypes: Bool
+    let fallbackReason: String?
+
+    var refillMode: String { usesFriendlyTypes ? "friendly" : "nonForced" }
+
+    func refill(in grid: OrbGrid) -> [OrbSpawn] {
+        precondition(slots == grid.emptyPositions())
+        precondition(types.count == slots.count)
+        return grid.refill(types: types, at: slots)
+    }
+
+#if DEBUG
+    func logDebug(resolveID: UInt) {
+        for attempt in decision.rolls {
+            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) candidateMaxGroups=\(decision.candidateMaxGroups) probability=\(attempt.probability) roll=\(attempt.roll) attemptedTarget=\(attempt.groupCount) selectedTarget=\(decision.selectedTarget)")
+        }
+        if decision.rolls.isEmpty {
+            print("[FRIENDLY_ROLL] resolveID=\(resolveID) previousResolvedGroupCount=\(decision.previousResolvedGroupCount) emptySlotCount=\(decision.emptySlotCount) physicalMaxGroups=\(decision.physicalMaxGroups) candidateMaxGroups=\(decision.candidateMaxGroups) probability=none roll=none selectedTarget=\(decision.selectedTarget)")
+        }
+        let forced = plan?.forcedTypes ?? [:]
+        let positions = forced.keys.sorted { ($0.row, $0.column) < ($1.row, $1.column) }
+        let forcedTypes = positions.map { forced[$0]?.rawValue ?? "missing" }
+        print("[FRIENDLY_PLAN] resolveID=\(resolveID) selectedTarget=\(decision.selectedTarget) plannedTarget=\(plan?.plannedTarget.description ?? "none") refillSlots=\(FriendlyRefillPipeline.describe(slots)) planCalled=\(planCalled) planReturned=\(plan != nil) plannedTypeCount=\(plan?.types.count ?? 0) forcedPositions=\(FriendlyRefillPipeline.describe(positions)) forcedTypes=\(forcedTypes) strategy=\(plan?.strategy ?? "none") forcedTraceAvailable=\(plan != nil && plan?.strategy != "multi-group-search") validationDetectedGroups=\(validationDetectedGroups?.description ?? "none") fallbackUsed=\(!usesFriendlyTypes) fallbackReason=\(fallbackReason ?? "none") planUsed=\(usesFriendlyTypes) refillMode=\(refillMode)")
+    }
+#endif
+}
+
+enum FriendlyRefillPipeline {
+    static func prepare(
+        grid: OrbGrid,
+        previousResolution: ResolveResult,
+        controller: SkyfallController
+    ) -> FriendlyRefillPreparation {
+        var generator = SystemRandomNumberGenerator()
+        return prepare(grid: grid, previousResolution: previousResolution,
+                       controller: controller, using: &generator)
+    }
+
+    static func prepare<R: RandomNumberGenerator>(
+        grid: OrbGrid,
+        previousResolution: ResolveResult,
+        controller: SkyfallController,
+        using generator: inout R,
+        roll: (Int) -> Double = { _ in Double.random(in: 0..<1) },
+        planProvider: ((OrbGrid, [GridPosition], Int) -> FriendlyRefillPlan?)? = nil
+    ) -> FriendlyRefillPreparation {
+        precondition(!controller.hasControlledTarget)
+        let slots = grid.emptyPositions()
+        guard let decision = controller.selectFriendlyRefillTarget(
+            previousResolvedGroupCount: previousResolution.comboCount,
+            emptySlotCount: slots.count,
+            roll: roll
+        ) else { preconditionFailure("Friendly preparation called in ON mode") }
+        let called = decision.selectedTarget > 0
+        let plan: FriendlyRefillPlan?
+        if called {
+            if let planProvider {
+                // Test seam for verifying caller behavior on nil, malformed or
+                // extra-natural-group plans. GameScene always uses the planner.
+                plan = planProvider(grid, slots, decision.selectedTarget)
+            } else {
+                plan = controller.makeFriendlyNaturalRefill(
+                    grid: grid, refillSlots: slots, targetGroupCount: decision.selectedTarget,
+                    using: &generator
+                )
+            }
+        } else {
+            plan = nil
+        }
+        var detected: Int?
+        var reason: String?
+        if let plan {
+            if plan.types.count != slots.count {
+                reason = "assignment-count-mismatch"
+            } else {
+                let assignments = Dictionary(uniqueKeysWithValues: zip(slots, plan.types))
+                let completeTypes = (0..<grid.rows).map { row in
+                    (0..<grid.columns).map { column in
+                        let position = GridPosition(row: row, column: column)
+                        guard let type = grid.orb(at: position)?.type ?? assignments[position]
+                        else { preconditionFailure("Incomplete Friendly assignment") }
+                        return type
+                    }
+                }
+                detected = scan(in: OrbGrid(types: completeTypes)).matches.count
+                if detected == 0 { reason = "full-grid-validation-zero-groups" }
+            }
+            if reason == nil {
+                return FriendlyRefillPreparation(
+                    slots: slots, decision: decision, planCalled: called, plan: plan,
+                    types: plan.types, validationDetectedGroups: detected,
+                    usesFriendlyTypes: true, fallbackReason: nil
+                )
+            }
+        } else {
+            reason = called ? "planner-returned-nil"
+                : (decision.candidateMaxGroups == 0 ? "insufficient-candidate-groups" : "roll-miss")
+        }
+        let nonForced = controller.makeNonForcedRefill(grid: grid, refillSlots: slots, using: &generator)
+        let types: [OrbType]
+        if let nonForced, nonForced.count == slots.count {
+            types = nonForced
+        } else {
+            reason = (reason ?? "unknown") + ";nonforced-assignment-count-mismatch"
+            guard let natural = controller.makeNaturalRefill(grid: grid, refillSlots: slots, typeProvider: {
+                OrbType.allCases.randomElement(using: &generator) ?? .fire
+            }) else { preconditionFailure("Actual empty slots changed during planning") }
+            types = natural
+        }
+        return FriendlyRefillPreparation(
+            slots: slots, decision: decision, planCalled: called, plan: plan,
+            types: types, validationDetectedGroups: detected,
+            usesFriendlyTypes: false, fallbackReason: reason
+        )
+    }
+
+    static func scan(in grid: OrbGrid) -> StableBoardScan {
+        StableBoardScan(matches: MatchDetector().detect(in: grid))
+    }
+
+#if DEBUG
+    static func describe(_ positions: [GridPosition]) -> String {
+        let ordered = positions.sorted { ($0.row, $0.column) < ($1.row, $1.column) }
+        return "[" + ordered.map { "(\($0.row),\($0.column))" }.joined(separator: ",") + "]"
+    }
+#endif
 }
