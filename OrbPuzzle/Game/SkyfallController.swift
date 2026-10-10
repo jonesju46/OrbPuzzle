@@ -15,7 +15,10 @@ struct FriendlyRefillDecision: Equatable, Sendable {
     let physicalMaxGroups: Int
     let candidateMaxGroups: Int
     let rolls: [FriendlyRefillRoll]
-    let selectedTarget: Int
+    var selectedTarget: Int
+
+    var friendlyHit: Bool { rolls.first?.succeeded == true }
+    var requestedTarget: Int { friendlyHit ? capacityTarget : 0 }
 }
 
 struct FriendlyRefillPlan: Equatable, Sendable {
@@ -645,7 +648,7 @@ struct FriendlyRefillPreparation {
         let positions = forced.keys.sorted { ($0.row, $0.column) < ($1.row, $1.column) }
         let rawTriples = plan?.forcedGroups.map { FriendlyRefillPipeline.describe($0) } ?? []
         let forcedTypes = positions.map { forced[$0]?.rawValue ?? "missing" }
-        print("[FRIENDLY_PLAN] resolveID=\(resolveID) selectedTarget=\(decision.selectedTarget) plannedTarget=\(plan?.plannedTarget.description ?? "none") removedOrbs=\(removedOrbCount) rawForcedTriples=\(rawTriples) refillSlots=\(FriendlyRefillPipeline.describe(slots)) planCalled=\(planCalled) planReturned=\(plan != nil) plannedTypeCount=\(plan?.types.count ?? 0) forcedPositions=\(FriendlyRefillPipeline.describe(positions)) forcedTypes=\(forcedTypes) strategy=\(plan?.strategy ?? "none") forcedTraceAvailable=\(plan != nil && plan?.strategy != "multi-group-search") validationDetectedGroups=\(validationDetectedGroups?.description ?? "none") directGroups=\(directGroupCount) fallbackUsed=\(!usesFriendlyTypes) fallbackReason=\(fallbackReason ?? "none") planUsed=\(usesFriendlyTypes) refillMode=\(refillMode)")
+        print("[FRIENDLY_PLAN] resolveID=\(resolveID) requestedTarget=\(decision.requestedTarget) hit=\(decision.friendlyHit) selectedTarget=\(decision.selectedTarget) plannedTarget=\(plan?.plannedTarget.description ?? "none") removedOrbs=\(removedOrbCount) rawForcedTriples=\(rawTriples) refillSlots=\(FriendlyRefillPipeline.describe(slots)) planCalled=\(planCalled) planReturned=\(plan != nil) plannedTypeCount=\(plan?.types.count ?? 0) forcedPositions=\(FriendlyRefillPipeline.describe(positions)) forcedTypes=\(forcedTypes) strategy=\(plan?.strategy ?? "none") forcedTraceAvailable=\(plan != nil && plan?.strategy != "multi-group-search") validationDetectedGroups=\(validationDetectedGroups?.description ?? "none") directGroups=\(directGroupCount) fallbackUsed=\(!usesFriendlyTypes) fallbackReason=\(fallbackReason ?? "none") planUsed=\(usesFriendlyTypes) refillMode=\(refillMode)")
     }
 #endif
 }
@@ -671,72 +674,81 @@ enum FriendlyRefillPipeline {
     ) -> FriendlyRefillPreparation {
         precondition(!controller.hasControlledTarget)
         let slots = grid.emptyPositions()
-        guard let decision = controller.selectFriendlyRefillTarget(
+        guard var decision = controller.selectFriendlyRefillTarget(
             previousResolvedGroupCount: previousResolution.comboCount,
             removedOrbCount: previousResolution.removedOrbCount,
             emptySlotCount: slots.count,
             roll: roll
         ) else { preconditionFailure("Friendly preparation called in ON mode") }
-        let called = decision.selectedTarget > 0
-        let plan: FriendlyRefillPlan?
-        if called {
-            if let planProvider {
-                // Test seam for verifying caller behavior on nil, malformed or
-                // extra-natural-group plans. GameScene always uses the planner.
-                plan = planProvider(grid, slots, decision.selectedTarget)
-            } else {
-                plan = controller.makeFriendlyNaturalRefill(
-                    grid: grid, refillSlots: slots, targetGroupCount: decision.selectedTarget,
-                    using: &generator
-                )
-            }
-        } else {
-            plan = nil
-        }
+        let requested = decision.requestedTarget
+        let called = requested > 0
+        decision.selectedTarget = 0
+        var plan: FriendlyRefillPlan?
         var detected: Int?
         var direct = 0
         var reason: String?
-        if let plan {
-            if plan.types.count != slots.count {
-                reason = "assignment-count-mismatch"
-            } else {
-                let assignments = Dictionary(uniqueKeysWithValues: zip(slots, plan.types))
-                let completeTypes = (0..<grid.rows).map { row in
-                    (0..<grid.columns).map { column in
-                        let position = GridPosition(row: row, column: column)
-                        guard let type = grid.orb(at: position)?.type ?? assignments[position]
-                        else { preconditionFailure("Incomplete Friendly assignment") }
-                        return type
+#if DEBUG
+        print("[FRIENDLY] removed=\(decision.removedOrbCount) capacity=\(decision.capacityTarget) roll=\(decision.rolls.first?.roll.description ?? "none") hit=\(decision.friendlyHit) requested=\(requested)")
+#endif
+        // The wave's single probability roll is complete. These attempts only
+        // search assignments; each candidate must meet its own direct target.
+        if called {
+            for target in stride(from: requested, through: 1, by: -1) {
+                if let planProvider {
+                    plan = planProvider(grid, slots, target)
+                } else {
+                    plan = controller.makeFriendlyNaturalRefill(
+                        grid: grid, refillSlots: slots, targetGroupCount: target,
+                        using: &generator
+                    )
+                }
+                reason = nil
+                detected = nil
+                direct = 0
+                if let plan {
+                    if plan.types.count != slots.count {
+                        reason = "assignment-count-mismatch"
+                    } else {
+                        let assignments = Dictionary(uniqueKeysWithValues: zip(slots, plan.types))
+                        let completeTypes = (0..<grid.rows).map { row in
+                            (0..<grid.columns).map { column in
+                                let position = GridPosition(row: row, column: column)
+                                guard let type = grid.orb(at: position)?.type ?? assignments[position]
+                                else { preconditionFailure("Incomplete Friendly assignment") }
+                                return type
+                            }
+                        }
+                        let matches = scan(in: OrbGrid(types: completeTypes)).matches
+                        detected = matches.count
+                        let slotSet = Set(slots)
+                        direct = matches.filter { $0.positions.isSubset(of: slotSet) }.count
+                        if detected == 0 { reason = "full-grid-validation-zero-groups" }
+                        else if direct < target { reason = "direct-groups-below-selected-target" }
+                    }
+                    if reason == nil {
+                        decision.selectedTarget = target
+#if DEBUG
+                        print("[FRIENDLY_TRY] target=\(target) result=success planned=\(plan.plannedTarget) detected=\(detected ?? 0) direct=\(direct)")
+                        print("[FRIENDLY_RESULT] requested=\(requested) selected=\(target) fallback=false")
+#endif
+                        return FriendlyRefillPreparation(
+                            slots: slots, removedOrbCount: previousResolution.removedOrbCount, decision: decision, planCalled: called, plan: plan,
+                            types: plan.types, validationDetectedGroups: detected, directGroupCount: direct,
+                            usesFriendlyTypes: true, fallbackReason: nil
+                        )
                     }
                 }
-                let matches = scan(in: OrbGrid(types: completeTypes)).matches
-                detected = matches.count
-                let slotSet = Set(slots)
-                direct = matches.filter { $0.positions.isSubset(of: slotSet) }.count
-                if detected == 0 { reason = "full-grid-validation-zero-groups" }
-                else if direct < decision.selectedTarget { reason = "direct-groups-below-selected-target" }
+#if DEBUG
+                print("[FRIENDLY_TRY] target=\(target) result=fail reason=\(reason ?? controller.lastFriendlyPlanningFailure ?? "no-feasible-assignment")")
+#endif
             }
-            if reason == nil {
-                return FriendlyRefillPreparation(
-                    slots: slots, removedOrbCount: previousResolution.removedOrbCount, decision: decision, planCalled: called, plan: plan,
-                    types: plan.types, validationDetectedGroups: detected, directGroupCount: direct,
-                    usesFriendlyTypes: true, fallbackReason: nil
-                )
-            }
+            reason = "no-feasible-friendly-target"
         } else {
-            if called {
-                let empty = Set(slots)
-                let hasDirectGeometry = slots.contains { position in
-                    (empty.contains(GridPosition(row: position.row, column: position.column + 1))
-                     && empty.contains(GridPosition(row: position.row, column: position.column + 2)))
-                    || (empty.contains(GridPosition(row: position.row + 1, column: position.column))
-                        && empty.contains(GridPosition(row: position.row + 2, column: position.column)))
-                }
-                reason = hasDirectGeometry ? (controller.lastFriendlyPlanningFailure ?? "planner-returned-nil") : "no-direct-new-slot-geometry"
-            } else {
-                reason = decision.candidateMaxGroups == 0 ? "insufficient-candidate-groups" : "roll-miss"
-            }
+            reason = decision.capacityTarget == 0 ? "insufficient-candidate-groups" : "roll-miss"
         }
+#if DEBUG
+        print("[FRIENDLY_RESULT] requested=\(requested) selected=0 fallback=true reason=\(reason ?? "unknown")")
+#endif
         let nonForced = controller.makeNonForcedRefill(grid: grid, refillSlots: slots, using: &generator)
         let types: [OrbType]
         if let nonForced, nonForced.count == slots.count {

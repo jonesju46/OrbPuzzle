@@ -932,11 +932,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertEqual(allOrbIDs(in: copy).count, 30)
                 XCTAssertTrue(copy.emptyPositions().isEmpty)
                 if roll < 0.65 {
-                    XCTAssertEqual(preparation.decision.selectedTarget, shape.count / 3)
+                    XCTAssertLessThanOrEqual(preparation.decision.selectedTarget, shape.count / 3)
                     if preparation.usesFriendlyTypes {
                         XCTAssertGreaterThanOrEqual(FriendlyRefillPipeline.scan(in: copy).matches.filter {
                             $0.positions.isSubset(of: slots)
-                        }.count, shape.count / 3)
+                        }.count, preparation.decision.selectedTarget)
                     } else {
                         XCTAssertNotNil(preparation.fallbackReason)
                     }
@@ -1004,7 +1004,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertEqual(preparation.slots, actualSlots, name)
                 XCTAssertEqual(preparation.decision.previousResolvedGroupCount, 1, name)
                 XCTAssertEqual(preparation.decision.rolls.first?.probability, 0.65, name)
-                XCTAssertEqual(preparation.decision.selectedTarget, shape.count / 3, name)
+                XCTAssertLessThanOrEqual(preparation.decision.selectedTarget, shape.count / 3, name)
                 XCTAssertTrue(preparation.planCalled, name)
                 if preparation.usesFriendlyTypes {
                     XCTAssertGreaterThanOrEqual(preparation.directGroupCount, preparation.decision.selectedTarget, name)
@@ -1118,7 +1118,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
-    func testFriendlyRejectsPlanBelowSelectedTarget() {
+    func testFriendlyRejectsHigherAttemptThenAcceptsValidatedLowerTarget() {
         var board = matchTestBoardTypes()
         for column in 0..<3 { board[4][column] = .heart }
         for column in 3..<6 { board[4][column] = .light }
@@ -1135,12 +1135,110 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 FriendlyRefillPlan(types: Array(repeating: .heart, count: 6), plannedTarget: 1)
             }
         )
-        XCTAssertEqual(preparation.decision.selectedTarget, 2)
+        XCTAssertEqual(preparation.decision.selectedTarget, 1)
         XCTAssertEqual(preparation.directGroupCount, 1)
-        XCTAssertFalse(preparation.usesFriendlyTypes)
-        XCTAssertEqual(preparation.fallbackReason, "direct-groups-below-selected-target")
+        XCTAssertTrue(preparation.usesFriendlyTypes)
+        XCTAssertNil(preparation.fallbackReason)
         XCTAssertEqual(preparation.refill(in: grid).count, 6)
         XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testFriendlyHighestFeasibleTargetDoesNotReroll() {
+        let cases = [(capacity: 1, feasible: 1), (2,1), (5,3), (8,5), (10,1), (10,0)]
+        for item in cases {
+            let grid = OrbGrid(types: matchTestBoardTypes())
+            let positions = Set((0..<(item.capacity * 3)).map {
+                GridPosition(row: 4 - $0 / 6, column: $0 % 6)
+            })
+            let previous = ResolveResult(matches: [MatchResult(type: .heart, positions: positions)])
+            _ = grid.remove(positions)
+            _ = grid.collapse()
+            var attempts: [Int] = []
+            var calls = 0
+            var generator = SeededGenerator(seed: UInt64(60_000 + item.capacity))
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: previous, controller: SkyfallController(),
+                using: &generator, roll: { _ in calls += 1; return 0.31 },
+                planProvider: { board, slots, target in
+                    attempts.append(target)
+                    guard target == item.feasible else { return nil }
+                    var plannerGenerator = SeededGenerator(seed: UInt64(61_000 + target))
+                    return SkyfallController().makeFriendlyNaturalRefill(
+                        grid: board, refillSlots: slots, targetGroupCount: target,
+                        using: &plannerGenerator
+                    )
+                }
+            )
+            XCTAssertEqual(calls, 1)
+            XCTAssertTrue(preparation.decision.friendlyHit)
+            XCTAssertEqual(preparation.decision.requestedTarget, item.capacity)
+            XCTAssertEqual(preparation.decision.selectedTarget, item.feasible)
+            XCTAssertEqual(attempts, Array(stride(from: item.capacity,
+                through: max(1, item.feasible), by: -1)))
+            XCTAssertEqual(preparation.usesFriendlyTypes, item.feasible > 0)
+            if item.feasible == 0 {
+                XCTAssertEqual(preparation.fallbackReason, "no-feasible-friendly-target")
+            } else {
+                XCTAssertNil(preparation.fallbackReason)
+                XCTAssertGreaterThanOrEqual(preparation.directGroupCount, item.feasible)
+            }
+            XCTAssertEqual(preparation.refill(in: grid).count, item.capacity * 3)
+            if item.feasible > 0 {
+                XCTAssertGreaterThanOrEqual(FriendlyRefillPipeline.scan(in: grid).matches.filter {
+                    $0.positions.isSubset(of: Set(preparation.slots))
+                }.count, item.feasible)
+            }
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+        }
+    }
+
+    func testFriendlyActualGeometryCanFallFromTwoToOne() {
+        // Final collapsed destinations contain exactly one possible new-orb triple.
+        let grid = OrbGrid(types: matchTestBoardTypes())
+        let positions: Set<GridPosition> = [
+            GridPosition(row: 4, column: 0), GridPosition(row: 3, column: 0),
+            GridPosition(row: 4, column: 1), GridPosition(row: 4, column: 2),
+            GridPosition(row: 4, column: 4), GridPosition(row: 4, column: 5)
+        ]
+        let previous = ResolveResult(matches: [MatchResult(type: .heart, positions: positions)])
+        _ = grid.remove(positions)
+        var generator = SeededGenerator(seed: 62_001)
+        var calls = 0
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: previous, controller: SkyfallController(),
+            using: &generator, roll: { _ in calls += 1; return 0.31 }
+        )
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(preparation.decision.requestedTarget, 2)
+        XCTAssertEqual(preparation.decision.selectedTarget, 1)
+        XCTAssertTrue(preparation.usesFriendlyTypes)
+        XCTAssertNil(preparation.fallbackReason)
+        XCTAssertEqual(preparation.refill(in: grid).count, 6)
+        XCTAssertGreaterThanOrEqual(FriendlyRefillPipeline.scan(in: grid).matches.filter {
+            $0.positions.isSubset(of: positions)
+        }.count, 1)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testFriendlyMissNeverStartsFeasibilitySearch() {
+        let grid = OrbGrid(types: matchTestBoardTypes())
+        let positions = Set((0..<30).map { GridPosition(row: $0 / 6, column: $0 % 6) })
+        let previous = ResolveResult(matches: [MatchResult(type: .heart, positions: positions)])
+        _ = grid.remove(positions)
+        var calls = 0
+        var generator = SeededGenerator(seed: 62_000)
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: previous, controller: SkyfallController(),
+            using: &generator, roll: { _ in calls += 1; return 0.80 },
+            planProvider: { _, _, _ in XCTFail("MISS must not search"); return nil }
+        )
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(preparation.decision.friendlyHit)
+        XCTAssertEqual(preparation.decision.requestedTarget, 0)
+        XCTAssertEqual(preparation.decision.selectedTarget, 0)
+        XCTAssertEqual(preparation.fallbackReason, "roll-miss")
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
     }
 
     func testFriendlyImpossibleGeometryReturnsFailureWithoutShrinkingTarget() {
@@ -1210,7 +1308,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertNotNil(preparation.plan)
             XCTAssertFalse(preparation.usesFriendlyTypes)
             XCTAssertEqual(preparation.fallbackReason,
-                           malformed ? "assignment-count-mismatch" : "full-grid-validation-zero-groups")
+                           "no-feasible-friendly-target")
             XCTAssertEqual(preparation.refill(in: grid).count, 4)
             XCTAssertEqual(allOrbIDs(in: grid).count, 30)
             XCTAssertTrue(grid.emptyPositions().isEmpty)
@@ -1232,8 +1330,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
             )
             XCTAssertEqual(called, succeeds)
             XCTAssertEqual(preparation.planCalled, succeeds)
-            XCTAssertEqual(preparation.decision.selectedTarget, succeeds ? 1 : 0)
-            XCTAssertEqual(preparation.fallbackReason, succeeds ? "planner-returned-nil" : "roll-miss")
+            XCTAssertEqual(preparation.decision.selectedTarget, 0)
+            XCTAssertEqual(preparation.fallbackReason, succeeds ? "no-feasible-friendly-target" : "roll-miss")
             XCTAssertFalse(preparation.usesFriendlyTypes)
             XCTAssertEqual(preparation.refillMode, "nonForced")
             XCTAssertEqual(preparation.refill(in: grid).count, 4)
