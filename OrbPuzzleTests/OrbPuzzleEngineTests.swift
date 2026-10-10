@@ -673,11 +673,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     func testFriendlyRemovedCountFormulaAndSingleRollThreshold() {
         let cases = [(3,1),(4,1),(5,1),(6,2),(7,2),(8,2),(9,3),(10,3),(11,3),
-                     (12,4),(15,5),(18,6),(20,6),(21,7),(24,8),(27,9),(30,10)]
-        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.hitProbability, 0.5)
+                     (12,4),(15,5),(17,5),(18,6),(20,6),(21,7),(24,8),(27,9),(30,10)]
+        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.hitProbability, 0.65)
         for (removed, target) in cases {
             XCTAssertEqual(FriendlyNaturalSkyfallPolicy.capacityTarget(for: removed), target)
-            for value in [0.000, 0.499, 0.500, 0.501, 0.999] {
+            for value in [0.000, 0.649, 0.650, 0.651, 0.999] {
                 var calls = 0
                 let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
                     previousResolvedGroupCount: 1, removedOrbCount: removed,
@@ -689,17 +689,17 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 )
                 XCTAssertEqual(calls, 1)
                 XCTAssertEqual(decision.rolls.count, 1)
-                XCTAssertEqual(decision.selectedTarget, value < 0.5 ? target : 0)
+                XCTAssertEqual(decision.selectedTarget, value < 0.65 ? target : 0)
                 XCTAssertEqual(decision.capacityTarget, target)
             }
         }
     }
 
-    func testFriendlyThreeOrbGroupsOneThroughThirtyAlwaysUseSingleFiftyPercentRoll() {
+    func testFriendlyThreeOrbGroupsOneThroughThirtyAlwaysUseSingleSixtyFivePercentRoll() {
         // 1...10 is the current 30-orb runtime range. 11...30 checks the generic
         // policy only; it does not claim the current board can hold those groups.
         for groups in 1...30 {
-            for value in [0.499, 0.500, 0.900] {
+            for value in [0.649, 0.650, 0.900] {
                 var calls = 0
                 let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
                     previousResolvedGroupCount: groups,
@@ -713,8 +713,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertEqual(calls, 1)
                 XCTAssertEqual(decision.capacityTarget, groups)
                 XCTAssertEqual(decision.rolls.count, 1)
-                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
-                XCTAssertEqual(decision.selectedTarget, value < 0.50 ? groups : 0)
+                XCTAssertEqual(decision.rolls.first?.probability, 0.65)
+                XCTAssertEqual(decision.selectedTarget, value < 0.65 ? groups : 0)
             }
         }
     }
@@ -844,7 +844,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                     roll: { _ in 0.49 }
                 )
                 XCTAssertEqual(decision.selectedTarget, count / 3)
-                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
+                XCTAssertEqual(decision.rolls.first?.probability, 0.65)
                 guard let plan = SkyfallController().makeFriendlyNaturalRefill(
                     grid: grid, refillSlots: slots, targetGroupCount: 1, using: &generator
                 ) else {
@@ -911,15 +911,15 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertEqual(resolution.removedOrbCount, shape.count)
             _ = grid.remove(resolution.removedPositions)
             _ = grid.collapse()
-            for roll in [0.32, 0.504] {
+            for roll in [0.32, 0.654] {
                 var generator = SeededGenerator(seed: UInt64(11_000 + shape.count))
                 let decision = FriendlyNaturalSkyfallPolicy.selectTarget(
                     previousResolvedGroupCount: resolution.comboCount,
                     removedOrbCount: grid.emptyPositions().count,
                     emptySlotCount: grid.emptyPositions().count, roll: { _ in roll }
                 )
-                XCTAssertEqual(decision.rolls.first?.probability, 0.50)
-                XCTAssertEqual(decision.selectedTarget, roll < 0.50 ? shape.count / 3 : 0)
+                XCTAssertEqual(decision.rolls.first?.probability, 0.65)
+                XCTAssertEqual(decision.selectedTarget, roll < 0.65 ? shape.count / 3 : 0)
                 let copy = OrbGrid(types: board)
                 _ = copy.remove(resolution.removedPositions)
                 _ = copy.collapse()
@@ -931,7 +931,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 XCTAssertEqual(preparation.refill(in: copy).count, shape.count)
                 XCTAssertEqual(allOrbIDs(in: copy).count, 30)
                 XCTAssertTrue(copy.emptyPositions().isEmpty)
-                if roll < 0.50 {
+                if roll < 0.65 {
                     XCTAssertEqual(preparation.decision.selectedTarget, shape.count / 3)
                     if preparation.usesFriendlyTypes {
                         XCTAssertGreaterThanOrEqual(FriendlyRefillPipeline.scan(in: copy).matches.filter {
@@ -1003,7 +1003,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 )
                 XCTAssertEqual(preparation.slots, actualSlots, name)
                 XCTAssertEqual(preparation.decision.previousResolvedGroupCount, 1, name)
-                XCTAssertEqual(preparation.decision.rolls.first?.probability, 0.50, name)
+                XCTAssertEqual(preparation.decision.rolls.first?.probability, 0.65, name)
                 XCTAssertEqual(preparation.decision.selectedTarget, shape.count / 3, name)
                 XCTAssertTrue(preparation.planCalled, name)
                 if preparation.usesFriendlyTypes {

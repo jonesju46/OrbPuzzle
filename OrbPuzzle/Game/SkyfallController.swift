@@ -38,7 +38,7 @@ struct FriendlyRefillPlan: Equatable, Sendable {
 
 enum FriendlyNaturalSkyfallPolicy {
     static let maximumGroupCount = 10
-    static let hitProbability = 0.50
+    static let hitProbability = 0.65
 
     static func capacityTarget(for removedOrbCount: Int) -> Int {
         max(0, removedOrbCount) / 3

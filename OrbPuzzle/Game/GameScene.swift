@@ -48,7 +48,6 @@ final class GameScene: SKScene {
     private var debugLabels: [SKLabelNode] = []
     private var orbTypeDebugLabels: [SKLabelNode] = []
 #if DEBUG
-    private var friendlyDebugLabels: [SKLabelNode] = []
     private var friendlyDebugPreparation: FriendlyRefillPreparation?
     private var friendlyDebugDetectedGroups: Int?
     private var friendlyDebugStatistics: [Int: FriendlyRefillDebugStatistics] = [:]
@@ -152,7 +151,6 @@ final class GameScene: SKScene {
 #if DEBUG
         friendlyDebugPreparation = nil
         friendlyDebugDetectedGroups = nil
-        updateFriendlyDebugHUD()
 #endif
         turnController.resetSession()
         comboLabel.text = "Combo 0"
@@ -240,16 +238,6 @@ final class GameScene: SKScene {
             addChild(label)
             orbTypeDebugLabels.append(label)
         }
-        for _ in 0..<7 {
-            let label = SKLabelNode(fontNamed: "Menlo")
-            label.fontSize = 10
-            label.fontColor = .systemYellow
-            label.horizontalAlignmentMode = .left
-            label.zPosition = 100
-            addChild(label)
-            friendlyDebugLabels.append(label)
-        }
-        updateFriendlyDebugHUD()
 #endif
         layoutInterface()
         updateTimerUI()
@@ -389,7 +377,7 @@ final class GameScene: SKScene {
 
 #if DEBUG
         // Fit the diagnostic rows below the board, without moving gameplay UI.
-        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 172))
+        let debugScale = min(1, max(0.1, (boardFrame.minY - 8) / 88))
         for (index, label) in debugLabels.enumerated() {
             label.fontSize = 10 * debugScale
             label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
@@ -401,11 +389,6 @@ final class GameScene: SKScene {
             label.fontSize = 10 * debugScale
             label.position = CGPoint(x: rightColumnX, y: boardFrame.minY - (18 + CGFloat(index) * 12) * debugScale)
         }
-        for (index, label) in friendlyDebugLabels.enumerated() {
-            label.fontSize = 10 * debugScale
-            label.position = CGPoint(x: horizontalMargin, y: boardFrame.minY - (94 + CGFloat(index) * 12) * debugScale)
-        }
-        updateFriendlyDebugHUD()
 #endif
     }
 
@@ -970,7 +953,6 @@ final class GameScene: SKScene {
                     .record(friendlyPreparation)
             }
         }
-        updateFriendlyDebugHUD()
 #endif
         var plannedTypes: [OrbType]?
         if skyfallController.hasControlledTarget {
@@ -1069,7 +1051,6 @@ final class GameScene: SKScene {
                     let stats = self.friendlyDebugStatistics[preparation.slots.count] ?? FriendlyRefillDebugStatistics()
                     print("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
                 }
-                self.updateFriendlyDebugHUD()
             }
 #endif
 
@@ -1273,32 +1254,7 @@ final class GameScene: SKScene {
         updateDebugOverlay()
     }
 
-#if DEBUG
-    private func updateFriendlyDebugHUD() {
-        guard friendlyDebugLabels.count == 7 else { return }
-        let preparation = friendlyDebugPreparation
-        let decision = preparation?.decision
-        let attempt = decision?.rolls.last
-        let rollText = attempt.map { String(format: "%.3f / %.3f", $0.roll, $0.probability) } ?? "-"
-        let target = decision?.selectedTarget ?? 0
-        let texts = [
-            "FRIENDLY (latest refill)",
-            "PrevGroups: \(decision?.previousResolvedGroupCount.description ?? "-") Removed: \(preparation?.removedOrbCount.description ?? "-")",
-            "Slots: \(preparation?.slots.count.description ?? "-") Capacity: \(decision?.capacityTarget.description ?? "-")",
-            "Roll: \(rollText) Selected: \(target)",
-            "Planned: \(preparation?.plan?.plannedTarget.description ?? "-") Direct: \(preparation?.directGroupCount.description ?? "-")",
-            "Detected: \(friendlyDebugDetectedGroups?.description ?? "-") Mode: \(preparation?.refillMode ?? "-")",
-            "Fallback: \(preparation?.fallbackReason ?? "-")"
-        ]
-        for (label, text) in zip(friendlyDebugLabels, texts) {
-            label.text = text
-            label.xScale = 1
-            if label.frame.width > boardFrame.width, boardFrame.width > 0 {
-                label.xScale = boardFrame.width / label.frame.width
-            }
-        }
-    }
-#endif
+
 
     private func updateDebugOverlay() {
 #if DEBUG
