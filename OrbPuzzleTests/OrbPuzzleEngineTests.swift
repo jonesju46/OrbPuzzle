@@ -711,7 +711,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(controller.makeFriendlyNaturalRefill(
             grid: grid, refillSlots: grid.emptyPositions(), targetGroupCount: 2, using: &generator
         ))
-        XCTAssertEqual(controller.lastFriendlyPlanningFailure, "no-feasible-direct-target")
+        XCTAssertEqual(controller.lastFriendlyPlanningFailure, "geometry-impossible")
     }
 
     func testFriendlyMatchSizeCapacityThreeThroughThirty() {
@@ -940,9 +940,144 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(preparation.decision.requestedTarget, 1)
         XCTAssertEqual(preparation.decision.selectedTarget, 0)
         XCTAssertFalse(preparation.usesFriendlyTypes)
-        XCTAssertEqual(preparation.fallbackReason, "no-feasible-friendly-target")
+        XCTAssertEqual(preparation.fallbackReason, "planner-failure")
         XCTAssertEqual(preparation.refill(in: grid).count, 4)
         XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+    }
+
+    func testFriendlyNineManualCombosDistinguishMissFromSuccessfulRefill() {
+        for hit in [false, true] {
+            var board = matchTestBoardTypes()
+            let colors: [OrbType] = [.heart,.water,.light]
+            for index in 0..<9 {
+                for column in ((index % 2) * 3)..<((index % 2) * 3 + 3) {
+                    board[4 - index / 2][column] = colors[index % 3]
+                }
+            }
+            let grid = OrbGrid(types: board)
+            let previous = ResolveResult(matches: MatchDetector().detect(in: grid))
+            XCTAssertEqual(previous.comboCount, 9)
+            XCTAssertEqual(previous.removedOrbCount, 27)
+            _ = grid.remove(previous.removedPositions)
+            _ = GravityController().apply(to: grid, nodes: [:], pointForPosition: { _ in .zero })
+            let analysis = FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: 3)
+            XCTAssertFalse(analysis.provesNoDirectGroup)
+            var generator = SeededGenerator(seed: 80_001)
+            var indices: [Int] = []
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: grid, previousResolution: previous, controller: SkyfallController(),
+                using: &generator, roll: { index in
+                    indices.append(index)
+                    return hit && index == 1 ? 0.30 : 0.80
+                }
+            )
+            XCTAssertEqual(preparation.decision.requestedTarget, hit ? 1 : 0)
+            XCTAssertEqual(indices, hit ? [1,2] : [1])
+            XCTAssertEqual(preparation.usesFriendlyTypes, hit)
+            XCTAssertEqual(preparation.failureCategory, hit ? nil : "probability-miss")
+            let refill = RefillController().refillEmptySlots(
+                grid: grid, slots: preparation.slots, types: preparation.types,
+                boardNode: SKNode(), cellSize: CGSize(width: 50, height: 50),
+                pointForPosition: { CGPoint(x: CGFloat($0.column) * 50, y: CGFloat($0.row) * 50) },
+                friendlyPreparation: preparation
+            )
+            XCTAssertEqual(refill.spawns.count, 27)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+            if hit {
+                XCTAssertTrue(FriendlyRefillPipeline.scan(in: grid).matches.contains {
+                    $0.matchSize == 3 && $0.positions.isSubset(of: Set(preparation.slots))
+                })
+            }
+        }
+    }
+
+    func testFriendlyAnalyzerSeparatesGeometryAndSearchLimitWithoutMutatingBoard() {
+        let grid = OrbGrid(types: matchTestBoardTypes())
+        let before = grid.cells
+        let holes: Set<GridPosition> = [GridPosition(row: 4, column: 0),
+            GridPosition(row: 4, column: 2), GridPosition(row: 4, column: 4)]
+        _ = grid.remove(holes)
+        let afterRemoval = grid.cells
+        let impossible = FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: 3)
+        XCTAssertTrue(impossible.provesNoDirectGroup)
+        XCTAssertFalse(impossible.candidateSearchLimited)
+        XCTAssertEqual(impossible.geometryCandidateCount, 0)
+        XCTAssertEqual(grid.cells, afterRemoval)
+        XCTAssertNotEqual(grid.cells, before)
+        let full = OrbGrid()
+        let limited = FriendlyBoardAnalyzer.analyze(grid: full, matchSize: 5,
+                                                   stateLimit: 1, candidateLimit: 1)
+        XCTAssertTrue(limited.candidateSearchLimited)
+        XCTAssertFalse(limited.provesNoDirectGroup)
+        var generator = SeededGenerator(seed: 80_002)
+        let controller = SkyfallController()
+        XCTAssertNil(controller.makeFriendlyNaturalRefill(
+            grid: full, refillSlots: full.emptyPositions(), targetGroupCount: 1,
+            matchSize: 5, searchNodeLimit: 1, using: &generator
+        ))
+        XCTAssertEqual(controller.lastFriendlyPlanningFailure, "search-limit")
+    }
+
+    func testFriendlyAnalyzerRejectsPreservedOrbExtensionColors() {
+        var board = matchTestBoardTypes()
+        board[4][3] = .heart
+        let grid = OrbGrid(types: board)
+        let holes = Set((0..<3).map { GridPosition(row: 4, column: $0) })
+        _ = grid.remove(holes)
+        let analysis = FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: 3)
+        let candidate = analysis.candidates.first { Set($0.positions) == holes }
+        XCTAssertNotNil(candidate)
+        XCTAssertFalse(candidate?.allowedColors.contains(.heart) ?? true)
+        XCTAssertTrue(candidate?.allowedColors.contains(.water) ?? false)
+    }
+
+    func testFriendlyAnalyzerAllSizesAndColumnGeometriesAreDeterministic() {
+        let profiles = [[5,5,5,5,5,5], [5,4,3,2,1,0], [1,0,1,0,1,0], [3,3,0,3,3,0]]
+        for profile in profiles {
+            for size in 3...30 {
+                let grid = OrbGrid(types: matchTestBoardTypes())
+                let holes = Set((0..<6).flatMap { column in
+                    (0..<profile[column]).map { GridPosition(row: 4 - $0, column: column) }
+                })
+                _ = grid.remove(holes)
+                let snapshot = grid.cells
+                let first = FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: size,
+                                                         stateLimit: 256, candidateLimit: 64)
+                let second = FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: size,
+                                                          stateLimit: 256, candidateLimit: 64)
+                XCTAssertEqual(first, second)
+                XCTAssertEqual(first.columnEmptyCounts, profile)
+                XCTAssertTrue(first.candidates.allSatisfy {
+                    $0.positions.count == size && Set($0.positions).isSubset(of: holes)
+                })
+                XCTAssertEqual(grid.cells, snapshot)
+                var generator = SeededGenerator(seed: UInt64(81_000 + size + profile.reduce(0, +)))
+                let controller = SkyfallController()
+                let plan = controller.makeFriendlyNaturalRefill(
+                    grid: grid, refillSlots: grid.emptyPositions(), targetGroupCount: 1,
+                    matchSize: size, analysis: first, searchNodeLimit: 256, using: &generator
+                )
+                let types: [OrbType]
+                if let plan {
+                    types = plan.types
+                } else {
+                    XCTAssertTrue(["geometry-impossible", "search-limit", "planner-failure"]
+                        .contains(controller.lastFriendlyPlanningFailure ?? "missing"))
+                    guard let safe = controller.makeNonForcedRefill(
+                        grid: grid, refillSlots: grid.emptyPositions(), using: &generator
+                    ) else { XCTFail("Missing complete fallback"); continue }
+                    types = safe
+                }
+                XCTAssertEqual(grid.refill(types: types, at: first.slots).count, holes.count)
+                XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+                XCTAssertTrue(grid.emptyPositions().isEmpty)
+                if plan != nil {
+                    XCTAssertTrue(MatchDetector().detect(in: grid).contains {
+                        $0.matchSize == size && $0.positions.isSubset(of: holes)
+                    })
+                }
+            }
+        }
     }
 
     func testControlledSkyfallNeverUsesFriendlySizePolicy() {

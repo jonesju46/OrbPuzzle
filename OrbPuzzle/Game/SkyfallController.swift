@@ -84,6 +84,150 @@ enum FriendlyNaturalSkyfallPolicy {
 
 }
 
+struct FriendlyBoardCandidate: Equatable, Sendable {
+    let positions: [GridPosition]
+    let allowedColors: [OrbType]
+}
+
+struct FriendlyBoardAnalysis: Equatable, Sendable {
+    let matchSize: Int
+    let slots: [GridPosition]
+    let columnEmptyCounts: [Int]
+    let preservedTypes: [[OrbType?]]
+    let runCoveredSlots: Set<GridPosition>
+    let geometryCandidateCount: Int
+    let candidates: [FriendlyBoardCandidate]
+    let candidateSearchLimited: Bool
+
+    // Upper bound only. It never promises disjoint packing or color feasibility.
+    var directGroupUpperBound: Int { runCoveredSlots.count / max(1, matchSize) }
+    var provesNoDirectGroup: Bool {
+        directGroupUpperBound == 0 || (geometryCandidateCount == 0 && !candidateSearchLimited)
+    }
+}
+
+/// Read-only analysis feeding SkyfallController's existing planner. This type
+/// neither rolls probability nor refills or animates the live board.
+enum FriendlyBoardAnalyzer {
+    static func analyze(grid: OrbGrid, matchSize: Int,
+                        stateLimit: Int = 8_000, candidateLimit: Int = 1_024) -> FriendlyBoardAnalysis {
+        precondition(grid.rows == OrbGrid.defaultRows && grid.columns == OrbGrid.defaultColumns)
+        precondition((3...30).contains(matchSize) && stateLimit > 0 && candidateLimit > 0)
+        let slots = grid.emptyPositions()
+        let geometry = groupGeometry(in: Set(slots), matchSize: matchSize,
+                                     stateLimit: stateLimit, candidateLimit: candidateLimit)
+        var candidates: [FriendlyBoardCandidate] = []
+        for group in geometry.groups {
+            let groupSet = Set(group)
+            var colors: [OrbType] = []
+            for color in OrbType.allCases {
+                let types = (0..<grid.rows).map { row in
+                    (0..<grid.columns).map { column in
+                        let position = GridPosition(row: row, column: column)
+                        return groupSet.contains(position) ? color : grid.orb(at: position)?.type ?? .fire
+                    }
+                }
+                let partial = OrbGrid(types: types)
+                _ = partial.remove(Set(slots).subtracting(groupSet))
+                // Filling other holes cannot undo a preserved-orb extension or
+                // split a normalized component. Reject those colors before DFS.
+                if MatchDetector().detect(in: partial).contains(where: {
+                    $0.type == color && $0.positions == groupSet && $0.matchSize == matchSize
+                }) { colors.append(color) }
+            }
+            if !colors.isEmpty { candidates.append(FriendlyBoardCandidate(positions: group, allowedColors: colors)) }
+        }
+        return FriendlyBoardAnalysis(
+            matchSize: matchSize, slots: slots,
+            columnEmptyCounts: (0..<grid.columns).map { column in slots.filter { $0.column == column }.count },
+            preservedTypes: grid.cells.map { $0.map { $0?.type } },
+            runCoveredSlots: geometry.coverage, geometryCandidateCount: geometry.groups.count,
+            candidates: candidates, candidateSearchLimited: geometry.limited
+        )
+    }
+
+    private static func groupGeometry(in slots: Set<GridPosition>, matchSize: Int, stateLimit: Int, candidateLimit: Int) -> (groups: [[GridPosition]], limited: Bool, coverage: Set<GridPosition>) {
+        func bit(_ position: GridPosition) -> UInt64 {
+            UInt64(1) << (position.row * OrbGrid.defaultColumns + position.column)
+        }
+        func mask(_ positions: [GridPosition]) -> UInt64 {
+            positions.reduce(UInt64(0)) { $0 | bit($1) }
+        }
+        func positions(_ value: UInt64) -> [GridPosition] {
+            slots.filter { value & bit($0) != 0 }.sorted {
+                ($0.row, $0.column) < ($1.row, $1.column)
+            }
+        }
+        var runs = Set<UInt64>()
+        for start in slots {
+            for direction in [(row: 0, column: 1), (row: 1, column: 0)] {
+                var line: [GridPosition] = []
+                for offset in 0..<matchSize {
+                    let next = GridPosition(row: start.row + offset * direction.row,
+                                            column: start.column + offset * direction.column)
+                    guard slots.contains(next) else { break }
+                    line.append(next)
+                    if line.count >= 3 { runs.insert(mask(line)) }
+                }
+            }
+        }
+        let orderedRuns = runs.sorted()
+        var exact = Set(orderedRuns.filter { $0.nonzeroBitCount == matchSize })
+        if slots.count == matchSize {
+            let all = mask(Array(slots))
+            let covered = orderedRuns.reduce(UInt64(0), |)
+            // Final normalization still checks connectivity and preserved extensions.
+            if covered == all { exact.insert(all) }
+        }
+        // Include compact bands up front so large sizes do not depend on traversing
+        // thousands of smaller unions before reaching the requested cardinality.
+        for startRow in 0..<OrbGrid.defaultRows {
+            for startColumn in 0..<OrbGrid.defaultColumns {
+                for width in 1...(OrbGrid.defaultColumns - startColumn) {
+                    let height = (matchSize + width - 1) / width
+                    guard startRow + height <= OrbGrid.defaultRows else { continue }
+                    let group = (0..<matchSize).map {
+                        GridPosition(row: startRow + $0 / width, column: startColumn + $0 % width)
+                    }
+                    guard Set(group).isSubset(of: slots) else { continue }
+                    let value = mask(group)
+                    let covered = orderedRuns.filter { $0 & value == $0 }.reduce(UInt64(0), |)
+                    if covered == value { exact.insert(value) }
+                }
+            }
+        }
+        var seen = runs
+        var queue = orderedRuns.filter { $0.nonzeroBitCount < matchSize }
+        var cursor = 0
+        var truncated = false
+        while cursor < queue.count, seen.count < stateLimit, exact.count < candidateLimit {
+            let current = queue[cursor]
+            cursor += 1
+            var neighbors: UInt64 = current
+            for position in positions(current) {
+                for neighbor in [GridPosition(row: position.row - 1, column: position.column),
+                                 GridPosition(row: position.row + 1, column: position.column),
+                                 GridPosition(row: position.row, column: position.column - 1),
+                                 GridPosition(row: position.row, column: position.column + 1)] where slots.contains(neighbor) {
+                    neighbors |= bit(neighbor)
+                }
+            }
+            for run in orderedRuns where run & neighbors != 0 {
+                let combined = current | run
+                guard combined.nonzeroBitCount <= matchSize,
+                      seen.insert(combined).inserted else { continue }
+                if combined.nonzeroBitCount == matchSize { exact.insert(combined) }
+                else { queue.append(combined) }
+                if seen.count >= stateLimit || exact.count >= candidateLimit { truncated = true; break }
+            }
+        }
+        let coverageMask = orderedRuns.reduce(UInt64(0), |)
+        return (exact.sorted().map { positions($0) },
+                truncated || cursor < queue.count, Set(positions(coverageMask)))
+    }
+
+}
+
 /// Plans only the types for real empty refill slots. Existing Orb models are never
 /// replaced, so every skyfall cycle preserves all non-removed IDs and types.
 final class SkyfallController {
@@ -209,6 +353,8 @@ final class SkyfallController {
         refillSlots: [GridPosition],
         targetGroupCount: Int,
         matchSize: Int = 3,
+        analysis: FriendlyBoardAnalysis? = nil,
+        searchNodeLimit: Int = 20_000,
         using generator: inout R
     ) -> FriendlyRefillPlan? {
         lastFriendlyPlanningFailure = nil
@@ -218,8 +364,14 @@ final class SkyfallController {
               !refillSlots.isEmpty else { return nil }
 
         guard (3...30).contains(matchSize),
-              targetGroupCount <= refillSlots.count / matchSize,
-              targetGroupCount <= FriendlyNaturalSkyfallPolicy.maximumGroupCount else { return nil }
+              targetGroupCount <= FriendlyNaturalSkyfallPolicy.maximumGroupCount else {
+            lastFriendlyPlanningFailure = "planner-failure"
+            return nil
+        }
+        guard targetGroupCount <= refillSlots.count / matchSize else {
+            lastFriendlyPlanningFailure = "geometry-impossible"
+            return nil
+        }
         let maximumGroupCount = targetGroupCount
         guard maximumGroupCount > 0,
               let candidate = makeFriendlyMatchProducingRefill(
@@ -227,6 +379,8 @@ final class SkyfallController {
             refillSlots: refillSlots,
             maximumGroupCount: maximumGroupCount,
             matchSize: matchSize,
+            analysis: analysis ?? FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: matchSize),
+            searchNodeLimit: searchNodeLimit,
             using: &generator
         ) else { return nil }
         let plannedTarget = MatchDetector().detect(
@@ -244,102 +398,37 @@ final class SkyfallController {
 
     /// Friendly guarantees must be made entirely from this refill's new orbs.
     /// Preserved-orb matches are natural extras, never substitutes for the target.
-    /// Candidate groups are connected unions of real 3+ horizontal/vertical runs.
-    /// Every member must itself be matched, so an arbitrary connected tail cannot
-    /// masquerade as a larger normalized group. Search is bounded on the 30-cell board.
-    private func friendlyGroupCandidates(in slots: Set<GridPosition>, matchSize: Int) -> [[GridPosition]] {
-        if matchSize == 3 { return tripleCandidates(in: slots) }
-        func bit(_ position: GridPosition) -> UInt64 {
-            UInt64(1) << (position.row * OrbGrid.defaultColumns + position.column)
-        }
-        func mask(_ positions: [GridPosition]) -> UInt64 {
-            positions.reduce(UInt64(0)) { $0 | bit($1) }
-        }
-        func positions(_ value: UInt64) -> [GridPosition] {
-            slots.filter { value & bit($0) != 0 }.sorted {
-                ($0.row, $0.column) < ($1.row, $1.column)
-            }
-        }
-        var runs = Set<UInt64>()
-        for start in slots {
-            for direction in [(row: 0, column: 1), (row: 1, column: 0)] {
-                var line: [GridPosition] = []
-                for offset in 0..<matchSize {
-                    let next = GridPosition(row: start.row + offset * direction.row,
-                                            column: start.column + offset * direction.column)
-                    guard slots.contains(next) else { break }
-                    line.append(next)
-                    if line.count >= 3 { runs.insert(mask(line)) }
-                }
-            }
-        }
-        let orderedRuns = runs.sorted()
-        var exact = Set(orderedRuns.filter { $0.nonzeroBitCount == matchSize })
-        if slots.count == matchSize {
-            let all = mask(Array(slots))
-            let covered = orderedRuns.reduce(UInt64(0), |)
-            // Final normalization still checks connectivity and preserved extensions.
-            if covered == all { exact.insert(all) }
-        }
-        // Include compact bands up front so large sizes do not depend on traversing
-        // thousands of smaller unions before reaching the requested cardinality.
-        for startRow in 0..<OrbGrid.defaultRows {
-            for startColumn in 0..<OrbGrid.defaultColumns {
-                for width in 1...(OrbGrid.defaultColumns - startColumn) {
-                    let height = (matchSize + width - 1) / width
-                    guard startRow + height <= OrbGrid.defaultRows else { continue }
-                    let group = (0..<matchSize).map {
-                        GridPosition(row: startRow + $0 / width, column: startColumn + $0 % width)
-                    }
-                    guard Set(group).isSubset(of: slots) else { continue }
-                    let value = mask(group)
-                    let covered = orderedRuns.filter { $0 & value == $0 }.reduce(UInt64(0), |)
-                    if covered == value { exact.insert(value) }
-                }
-            }
-        }
-        var seen = runs
-        var queue = orderedRuns.filter { $0.nonzeroBitCount < matchSize }
-        var cursor = 0
-        while cursor < queue.count, seen.count < 8_000, exact.count < 1_024 {
-            let current = queue[cursor]
-            cursor += 1
-            var neighbors: UInt64 = current
-            for position in positions(current) {
-                for neighbor in [GridPosition(row: position.row - 1, column: position.column),
-                                 GridPosition(row: position.row + 1, column: position.column),
-                                 GridPosition(row: position.row, column: position.column - 1),
-                                 GridPosition(row: position.row, column: position.column + 1)] where slots.contains(neighbor) {
-                    neighbors |= bit(neighbor)
-                }
-            }
-            for run in orderedRuns where run & neighbors != 0 {
-                let combined = current | run
-                guard combined.nonzeroBitCount <= matchSize,
-                      seen.insert(combined).inserted else { continue }
-                if combined.nonzeroBitCount == matchSize { exact.insert(combined) }
-                else { queue.append(combined) }
-                if seen.count >= 8_000 || exact.count >= 1_024 { break }
-            }
-        }
-        return exact.sorted().map { positions($0) }
-    }
-
     private func makeFriendlyMatchProducingRefill<R: RandomNumberGenerator>(
         grid: OrbGrid,
         refillSlots: [GridPosition],
         maximumGroupCount: Int,
         matchSize: Int,
+        analysis: FriendlyBoardAnalysis,
+        searchNodeLimit: Int,
         using generator: inout R
     ) -> (types: [OrbType], forcedTypes: [GridPosition: OrbType], strategy: String,
           groups: [[GridPosition]])? {
         let slots = Set(refillSlots)
-        let candidates = friendlyGroupCandidates(in: slots, matchSize: matchSize).shuffled(using: &generator)
+        precondition(analysis.slots == refillSlots && analysis.matchSize == matchSize)
+        precondition(analysis.preservedTypes == grid.cells.map { $0.map { $0?.type } })
+        let boardCandidates = analysis.candidates.shuffled(using: &generator)
+        let candidates = boardCandidates.map { $0.positions }
+        let allowedColors = Dictionary(uniqueKeysWithValues: boardCandidates.map {
+            (Set($0.positions), $0.allowedColors)
+        })
+        guard !analysis.provesNoDirectGroup else {
+            lastFriendlyPlanningFailure = "geometry-impossible"
+            return nil
+        }
+        guard maximumGroupCount <= analysis.directGroupUpperBound else {
+            lastFriendlyPlanningFailure = "geometry-impossible"
+            return nil
+        }
         // Bounded backtracking keeps the chosen target fixed. Packing failure,
         // color merges or natural extensions try another assignment, never N-1.
         var visited = 0
         var fullBoardChecks = 0
-        let nodeLimit = 20_000
+        let nodeLimit = max(1, searchNodeLimit)
         let validationLimit = 2_048
 
         // Capture the complete assignment returned by color recursion, not just
@@ -361,7 +450,7 @@ final class SkyfallController {
                 acceptedForced = forced
                 return types
             }
-            let palette = OrbType.allCases.shuffled(using: &generator).sorted { lhs, rhs in
+            let palette = (allowedColors[Set(groups[index])] ?? []).shuffled(using: &generator).sorted { lhs, rhs in
                 forced.values.filter { $0 == lhs }.count < forced.values.filter { $0 == rhs }.count
             }
             for type in palette {
@@ -401,8 +490,11 @@ final class SkyfallController {
             return nil
         }
         guard let plan = place(from: 0, groups: [], occupied: [], using: &generator) else {
+#if DEBUG
+            print("[FRIENDLY_SEARCH] target=\(maximumGroupCount) nodes=\(visited)/\(nodeLimit) validations=\(fullBoardChecks)/\(validationLimit) candidateSearchLimited=\(analysis.candidateSearchLimited)")
+#endif
             lastFriendlyPlanningFailure = visited >= nodeLimit || fullBoardChecks >= validationLimit
-                ? "search-budget-exhausted" : "no-feasible-direct-target"
+                || analysis.candidateSearchLimited ? "search-limit" : "planner-failure"
             return nil
         }
         return (plan.types, acceptedForced, "fixed-target-backtracking", plan.groups)
@@ -724,6 +816,14 @@ struct FriendlyRefillPreparation {
 
     var refillMode: String { usesFriendlyTypes ? "friendly" : "nonForced" }
 
+    var failureCategory: String? {
+        guard !usesFriendlyTypes, let fallbackReason else { return nil }
+        if fallbackReason.hasPrefix("roll-miss") { return "probability-miss" }
+        if fallbackReason.hasPrefix("search-limit") { return "search-limit" }
+        if fallbackReason.hasPrefix("geometry-impossible") { return "geometry-impossible" }
+        return "planner-failure"
+    }
+
     func refill(in grid: OrbGrid) -> [OrbSpawn] {
         precondition(slots == grid.emptyPositions())
         precondition(types.count == slots.count)
@@ -777,6 +877,8 @@ enum FriendlyRefillPipeline {
         ) else { preconditionFailure("Friendly preparation called in ON mode") }
         let requested = decision.requestedTarget
         let called = requested > 0
+        let analysis = called ? FriendlyBoardAnalyzer.analyze(grid: grid, matchSize: decision.friendlyMatchSize) : nil
+        var failureReasons: [String] = []
         decision.selectedTarget = 0
         var plan: FriendlyRefillPlan?
         var detected: Int?
@@ -784,6 +886,12 @@ enum FriendlyRefillPipeline {
         var reason: String?
 #if DEBUG
         print("[FRIENDLY] removed=\(decision.removedOrbCount) matchSize=\(decision.friendlyMatchSize) maxFriendlyCombo=\(decision.maxFriendlyCombo) roll=\(decision.rolls.first?.roll.description ?? "none") hit=\(decision.friendlyHit) requested=\(requested)")
+#endif
+#if DEBUG
+        if let analysis {
+            let boardTypes = analysis.preservedTypes.map { row in row.map { $0?.rawValue ?? "_" } }
+            print("[FRIENDLY_BOARD] matchSize=\(analysis.matchSize) slots=\(analysis.slots.count) columnEmptyCounts=\(analysis.columnEmptyCounts) coveredSlots=\(analysis.runCoveredSlots.count) upperBound=\(analysis.directGroupUpperBound) geometryCandidates=\(analysis.geometryCandidateCount) colorValidCandidates=\(analysis.candidates.count) candidateSearchLimited=\(analysis.candidateSearchLimited) boardTypes=\(boardTypes)")
+        }
 #endif
         // The wave's stop-on-miss probability chain is complete. These attempts only
         // search assignments; each candidate must meet its own direct target.
@@ -795,6 +903,7 @@ enum FriendlyRefillPipeline {
                     plan = controller.makeFriendlyNaturalRefill(
                         grid: grid, refillSlots: slots, targetGroupCount: target,
                         matchSize: decision.friendlyMatchSize,
+                        analysis: analysis,
                         using: &generator
                     )
                 }
@@ -836,11 +945,18 @@ enum FriendlyRefillPipeline {
                         )
                     }
                 }
+                failureReasons.append(reason ?? controller.lastFriendlyPlanningFailure ?? "planner-failure")
 #if DEBUG
                 print("[FRIENDLY_TRY] target=\(target) result=fail reason=\(reason ?? controller.lastFriendlyPlanningFailure ?? "no-feasible-assignment")")
 #endif
             }
-            reason = "no-feasible-friendly-target"
+            if failureReasons.contains("search-limit") {
+                reason = "search-limit"
+            } else if analysis?.provesNoDirectGroup == true {
+                reason = "geometry-impossible"
+            } else {
+                reason = "planner-failure"
+            }
         } else {
             reason = decision.maxFriendlyCombo == 0 ? "insufficient-candidate-groups" : "roll-miss"
         }
