@@ -7,16 +7,32 @@ struct FriendlyRefillRoll: Equatable, Sendable {
     let succeeded: Bool
 }
 
+enum FriendlyRefillPolicyMode: String, Equatable, Sendable {
+    case threeOrbStepped = "ThreeOrbStepped"
+    case existingSchemeB = "ExistingSchemeB"
+}
+
 struct FriendlyRefillDecision: Equatable, Sendable {
     let previousSizes: [Int]
     let removedOrbCount: Int
     let emptySlotCount: Int
+    let mode: FriendlyRefillPolicyMode
+    let waveProbability: Double
     let rolls: [FriendlyRefillRoll]
+    let probabilityTarget: Int
     var selectedTarget: Int
     var previousResolvedGroupCount: Int { previousSizes.count }
     var candidateMaxGroups: Int { previousSizes.count }
-    var friendlyHit: Bool { rolls.first?.succeeded == true }
-    var requestedSizes: [Int] { friendlyHit ? previousSizes : [] }
+    var friendlyHit: Bool { probabilityTarget > 0 }
+    var requestedSizes: [Int] {
+        guard friendlyHit else { return [] }
+        switch mode {
+        case .threeOrbStepped:
+            return Array(repeating: 3, count: probabilityTarget)
+        case .existingSchemeB:
+            return previousSizes
+        }
+    }
     var requestedTarget: Int { requestedSizes.count }
 }
 
@@ -38,19 +54,72 @@ struct FriendlyRefillPlan: Equatable, Sendable {
     }
 }
 
+enum ThreeOrbSteppedFriendlyPolicy {
+    static let supportedCombos = 1...10
+
+    static func probability(startingCombo: Int) -> Double {
+        switch startingCombo {
+        case 1: return 0.50
+        case 2...4: return 0.65
+        case 5...7: return 0.75
+        case 8...10: return 0.85
+        default: return 0
+        }
+    }
+
+    static func selectTarget(startingCombo: Int,
+                             roll: (Int) -> Double) -> (rolls: [FriendlyRefillRoll], target: Int) {
+        guard supportedCombos.contains(startingCombo) else { return ([], 0) }
+        let waveProbability = probability(startingCombo: startingCombo)
+        var results: [FriendlyRefillRoll] = []
+        for candidate in stride(from: startingCombo, through: 1, by: -1) {
+            let value = roll(candidate)
+            let succeeded = value < waveProbability
+            results.append(FriendlyRefillRoll(groupCount: candidate, probability: waveProbability,
+                                              roll: value, succeeded: succeeded))
+            if succeeded { return (results, candidate) }
+        }
+        return (results, 0)
+    }
+}
+
 enum FriendlyNaturalSkyfallPolicy {
     static let maximumGroupCount = 10
     static let probability = 0.65
+
+    static func mode(for previousSizes: [Int]) -> FriendlyRefillPolicyMode {
+        if previousSizes.count >= 1 && previousSizes.count <= maximumGroupCount
+            && previousSizes.allSatisfy({ $0 == 3 }) {
+            return .threeOrbStepped
+        }
+        return .existingSchemeB
+    }
+
+    static func threeOrbFriendlyProbability(startingCombo: Int) -> Double {
+        ThreeOrbSteppedFriendlyPolicy.probability(startingCombo: startingCombo)
+    }
 
     static func selectTarget(previousSizes: [Int], removedOrbCount: Int,
                              emptySlotCount: Int, roll: (Int) -> Double) -> FriendlyRefillDecision {
         precondition(previousSizes.allSatisfy { (3...30).contains($0) })
         precondition(previousSizes.count <= maximumGroupCount && previousSizes.reduce(0, +) <= 30)
+        let policyMode = mode(for: previousSizes)
+        if policyMode == .threeOrbStepped {
+            let waveProbability = threeOrbFriendlyProbability(startingCombo: previousSizes.count)
+            let stepped = ThreeOrbSteppedFriendlyPolicy.selectTarget(
+                startingCombo: previousSizes.count, roll: roll)
+            return FriendlyRefillDecision(previousSizes: previousSizes, removedOrbCount: removedOrbCount,
+                emptySlotCount: emptySlotCount, mode: policyMode, waveProbability: waveProbability,
+                rolls: stepped.rolls, probabilityTarget: stepped.target, selectedTarget: 0)
+        }
+
         let value = roll(1)
+        let succeeded = value < probability
         return FriendlyRefillDecision(previousSizes: previousSizes, removedOrbCount: removedOrbCount,
-            emptySlotCount: emptySlotCount,
+            emptySlotCount: emptySlotCount, mode: policyMode, waveProbability: probability,
             rolls: [FriendlyRefillRoll(groupCount: previousSizes.count, probability: probability,
-                                      roll: value, succeeded: value < probability)], selectedTarget: 0)
+                                      roll: value, succeeded: succeeded)],
+            probabilityTarget: succeeded ? previousSizes.count : 0, selectedTarget: 0)
     }
 
     // Unique multisets: maximize groups first, then requested orbs. No probability here.
@@ -789,7 +858,14 @@ struct FriendlyRefillPreparation {
 
 #if DEBUG
     func logDebug(resolveID: UInt) {
-        print("[FRIENDLY_PLAN] resolveID=\(resolveID) requestedCount=\(decision.requestedTarget) requestedSizes=\(decision.requestedSizes) plannedSizes=\(plannedSizes) fullSuccess=\(fullSuccess) partial=\(usesFriendlyTypes && !fullSuccess) searchLimited=\(searchLimited) reason=\(fallbackReason ?? "none") slots=\(FriendlyRefillPipeline.describe(slots))")
+        let status: String
+        if fullSuccess { status = "FULL_PLAN_SUCCESS" }
+        else if usesFriendlyTypes { status = "PARTIAL_PLAN_SUCCESS" }
+        else if failureCategory == "probability-miss" { status = "ALL_PROBABILITY_MISS" }
+        else if failureCategory == "geometry-impossible" { status = "GEOMETRY_IMPOSSIBLE" }
+        else if failureCategory == "search-limit" { status = "SEARCH_LIMIT_EXHAUSTED" }
+        else { status = "ASSIGNMENT_FAILURE" }
+        print("[FRIENDLY_PLAN] resolveID=\(resolveID) requestedCount=\(decision.requestedTarget) requestedSizes=\(decision.requestedSizes) plannedSizes=\(plannedSizes) status=\(status) searchLimited=\(searchLimited) reason=\(fallbackReason ?? "none") slots=\(FriendlyRefillPipeline.describe(slots))")
     }
 #endif
 }
@@ -839,7 +915,11 @@ enum FriendlyRefillPipeline {
         var attempts = 0
         var waveNodes = 0
 #if DEBUG
-        print("[FRIENDLY] roll=\(decision.rolls[0].roll) hit=\(decision.friendlyHit) previousSizes=\(decision.previousSizes) requestedSizes=\(requested) slots=\(slots.count)")
+        print("[FRIENDLY_POLICY] mode=\(decision.mode.rawValue) previousSizes=\(decision.previousSizes) startingCombo=\(decision.previousResolvedGroupCount) waveProbability=\(decision.waveProbability)")
+        for item in decision.rolls {
+            print("[FRIENDLY_ROLL] target=\(item.groupCount) roll=\(item.roll) result=\(item.succeeded ? "GO" : "MISS")")
+        }
+        print("[FRIENDLY] status=\(decision.friendlyHit ? "PROBABILITY_GO" : "ALL_PROBABILITY_MISS") probabilityTarget=\(decision.probabilityTarget) requestedSizes=\(requested) slots=\(slots.count)")
         print("[FRIENDLY_BOARD] snapshot=\(grid.cells.map { $0.map { $0?.type.rawValue ?? "_" } }) slots=\(describe(slots))")
         for size in analyses.keys.sorted() {
             let analysis = analyses[size]!
@@ -893,7 +973,7 @@ enum FriendlyRefillPipeline {
         let reason = !decision.friendlyHit ? "roll-miss" : limited ? "search-limit"
             : !reasons.isEmpty && reasons.allSatisfy({ $0 == "geometry-impossible" }) ? "geometry-impossible" : "assignment-failure"
 #if DEBUG
-        print("[FRIENDLY_RESULT] fullSuccess=false partial=false attempts=\(attempts)/\(subsetAttemptLimit) waveNodes=\(waveNodes)/\(waveNodeLimit) reason=\(reason)")
+        print("[FRIENDLY_RESULT] fullSuccess=false partial=false attempts=\(attempts)/\(subsetAttemptLimit) waveNodes=\(waveNodes)/\(waveNodeLimit) reason=\(reason) refill=NORMAL_REFILL")
 #endif
         let types = controller.makeNonForcedRefill(grid: grid, refillSlots: slots, using: &generator)
             ?? slots.map { _ in OrbType.allCases.randomElement(using: &generator) ?? .fire }

@@ -714,21 +714,221 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.lastFriendlyPlanningFailure, "geometry-impossible")
     }
 
-    func testFriendlySingleRollBoundariesAndCompleteSizeLists() {
-        let requirements = [[3], [3,3], [3,3,3,3,3], [4], [4,4,4], [5,5], [6],
-                            [3,4,5], [4,4,5,5,6,6], [15,15], [30]]
-        for sizes in requirements {
-            for value in [0.0, 0.649, 0.650, 0.999] {
-                var calls = 0
+    func testThreeOrbFriendlyProbabilityTableAndInvalidInputs() {
+        let expected: [Int: Double] = [
+            1: 0.50, 2: 0.65, 3: 0.65, 4: 0.65, 5: 0.75,
+            6: 0.75, 7: 0.75, 8: 0.85, 9: 0.85, 10: 0.85
+        ]
+        for startingCombo in 1...10 {
+            XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(
+                startingCombo: startingCombo), expected[startingCombo]!)
+        }
+        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(startingCombo: 0), 0)
+        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(startingCombo: 11), 0)
+    }
+
+    func testThreeOrbFriendlyBoundariesUseStrictLessThanAndStopAtFirstGo() {
+        for startingCombo in [1,2,5,8,10] {
+            let sizes = Array(repeating: 3, count: startingCombo)
+            let probability = FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(
+                startingCombo: startingCombo)
+            var belowCalls: [Int] = []
+            let below = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
+                roll: { target in belowCalls.append(target); return probability - 0.001 })
+            XCTAssertEqual(belowCalls, [startingCombo])
+            XCTAssertEqual(below.probabilityTarget, startingCombo)
+            XCTAssertEqual(below.requestedSizes, sizes)
+
+            for value in [probability, probability + 0.001] {
+                var missCalls: [Int] = []
+                let miss = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                    removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
+                    roll: { target in missCalls.append(target); return value })
+                XCTAssertEqual(missCalls, Array(stride(from: startingCombo, through: 1, by: -1)))
+                XCTAssertFalse(miss.friendlyHit)
+                XCTAssertTrue(miss.requestedSizes.isEmpty)
+            }
+        }
+    }
+
+    func testThreeOrbFriendlyAllStartingCombosUseDescendingFirstSuccess() {
+        for startingCombo in 1...10 {
+            let sizes = Array(repeating: 3, count: startingCombo)
+            let probability = FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(
+                startingCombo: startingCombo)
+
+            var firstCalls: [Int] = []
+            let first = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                removedOrbCount: startingCombo * 3, emptySlotCount: startingCombo * 3,
+                roll: { target in firstCalls.append(target); return probability - 0.01 })
+            XCTAssertEqual(firstCalls, [startingCombo])
+            XCTAssertEqual(first.probabilityTarget, startingCombo)
+
+            if startingCombo >= 2 {
+                var secondCalls: [Int] = []
+                let second = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                    removedOrbCount: startingCombo * 3, emptySlotCount: startingCombo * 3,
+                    roll: { target in
+                        secondCalls.append(target)
+                        return target == startingCombo ? probability : probability - 0.01
+                    })
+                XCTAssertEqual(secondCalls, [startingCombo, startingCombo - 1])
+                XCTAssertEqual(second.probabilityTarget, startingCombo - 1)
+            }
+
+            var oneCalls: [Int] = []
+            let one = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                removedOrbCount: startingCombo * 3, emptySlotCount: startingCombo * 3,
+                roll: { target in oneCalls.append(target); return target == 1 ? probability - 0.01 : probability })
+            XCTAssertEqual(oneCalls, Array(stride(from: startingCombo, through: 1, by: -1)))
+            XCTAssertEqual(one.probabilityTarget, 1)
+            XCTAssertEqual(one.requestedSizes, [3])
+            XCTAssertTrue(one.rolls.allSatisfy { $0.probability == probability })
+
+            var missCalls: [Int] = []
+            let miss = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                removedOrbCount: startingCombo * 3, emptySlotCount: startingCombo * 3,
+                roll: { target in missCalls.append(target); return probability })
+            XCTAssertEqual(missCalls, Array(stride(from: startingCombo, through: 1, by: -1)))
+            XCTAssertEqual(miss.probabilityTarget, 0)
+            XCTAssertTrue(miss.requestedSizes.isEmpty)
+        }
+    }
+
+    func testFriendlyPolicyModeIsolationAndExistingSchemeBRemainsSingleSixtyFivePercentRoll() {
+        for sizes in [[3], [3,3,3], Array(repeating: 3, count: 10)] {
+            XCTAssertEqual(FriendlyNaturalSkyfallPolicy.mode(for: sizes), .threeOrbStepped)
+        }
+        let schemeBRequirements = [[4], [3,4], [3,3,5], [6,6], [30]]
+        for sizes in schemeBRequirements {
+            XCTAssertEqual(FriendlyNaturalSkyfallPolicy.mode(for: sizes), .existingSchemeB)
+            for value in [0.649, 0.650, 0.999] {
+                var calls: [Int] = []
                 let decision = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
                     removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
-                    roll: { _ in calls += 1; return value })
-                XCTAssertEqual(calls, 1)
+                    roll: { target in calls.append(target); return value })
+                XCTAssertEqual(calls, [1])
+                XCTAssertEqual(decision.waveProbability, 0.65)
                 XCTAssertEqual(decision.friendlyHit, value < 0.65)
-                XCTAssertEqual(decision.previousSizes, sizes)
                 XCTAssertEqual(decision.requestedSizes, value < 0.65 ? sizes : [])
             }
         }
+    }
+
+    func testThreeOrbPlannerReceivesSelectedTargetWithoutRerollingOnFailure() {
+        for startingCombo in 1...10 {
+            for selectedTarget in 1...startingCombo {
+                let grid = OrbGrid()
+                let sizes = Array(repeating: 3, count: startingCombo)
+                let previous = ResolveResult(matches: sizes.enumerated().map { index, size in
+                    MatchResult(type: OrbType.allCases[index % OrbType.allCases.count],
+                        positions: Set((0..<size).map {
+                            GridPosition(row: index % 5, column: ($0 + index * 3) % 6)
+                        }))
+                })
+                var generator = SeededGenerator(seed: UInt64(120_000 + startingCombo * 10 + selectedTarget))
+                var rollCalls: [Int] = []
+                var firstRequestedSizes: [Int]?
+                _ = FriendlyRefillPipeline.prepare(grid: grid, previousResolution: previous,
+                    controller: SkyfallController(), using: &generator, roll: { target in
+                        rollCalls.append(target)
+                        return target == selectedTarget ? 0 : 0.999
+                    }, planProvider: { _, _, requested in
+                        if firstRequestedSizes == nil { firstRequestedSizes = requested }
+                        return nil
+                    })
+                XCTAssertEqual(rollCalls,
+                    Array(stride(from: startingCombo, through: selectedTarget, by: -1)))
+                XCTAssertEqual(firstRequestedSizes, Array(repeating: 3, count: selectedTarget))
+            }
+        }
+    }
+
+    func testThreeOrbTargetsOneThroughTenPassFullBoardValidation() {
+        for target in 1...10 {
+            let grid = OrbGrid()
+            let previous = ResolveResult(matches: (0..<target).map { index in
+                MatchResult(type: OrbType.allCases[index % OrbType.allCases.count],
+                    positions: Set((0..<3).map {
+                        GridPosition(row: index / 2, column: (index % 2) * 3 + $0)
+                    }))
+            })
+            var generator = SeededGenerator(seed: UInt64(125_000 + target))
+            let preparation = FriendlyRefillPipeline.prepare(grid: grid,
+                previousResolution: previous, controller: SkyfallController(), using: &generator,
+                roll: { _ in 0 }, planProvider: { _, slots, requested in
+                    XCTAssertEqual(requested, Array(repeating: 3, count: target))
+                    let groups = (0..<target).map { index in
+                        (0..<3).map {
+                            GridPosition(row: index / 2, column: (index % 2) * 3 + $0)
+                        }
+                    }
+                    let forcedTypes = Dictionary(uniqueKeysWithValues: groups.enumerated().flatMap { index, group in
+                        group.map { ($0, OrbType.allCases[index % OrbType.allCases.count]) }
+                    })
+                    let types = slots.map { position in
+                        forcedTypes[position]
+                            ?? OrbType.allCases[(position.row * 2 + position.column) % OrbType.allCases.count]
+                    }
+                    return FriendlyRefillPlan(types: types, plannedTarget: target,
+                        forcedTypes: forcedTypes, forcedGroups: groups)
+                })
+            XCTAssertEqual(preparation.decision.probabilityTarget, target)
+            XCTAssertTrue(preparation.fullSuccess, "target=\(target)")
+            XCTAssertEqual(preparation.plannedSizes, Array(repeating: 3, count: target))
+            XCTAssertEqual(preparation.refill(in: grid).count, 30)
+            XCTAssertEqual(preparation.directMatches(MatchDetector().detect(in: grid)).count, target)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+            XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        }
+    }
+
+    func testThreeOrbAllProbabilityMissUsesCompleteNonForcedRefill() {
+        let grid = OrbGrid(types: boardWithHorizontalMatch(length: 3))
+        let previous = ResolveResult(matches: MatchDetector().detect(in: grid))
+        _ = grid.remove(previous.removedPositions)
+        _ = grid.collapse()
+        var generator = SeededGenerator(seed: 126_001)
+        var rollCalls: [Int] = []
+        let preparation = FriendlyRefillPipeline.prepare(grid: grid,
+            previousResolution: previous, controller: SkyfallController(), using: &generator,
+            roll: { target in rollCalls.append(target); return 0.50 },
+            planProvider: { _, _, _ in XCTFail("All probability MISS must skip planner"); return nil })
+        XCTAssertEqual(rollCalls, [1])
+        XCTAssertEqual(preparation.decision.mode, .threeOrbStepped)
+        XCTAssertFalse(preparation.decision.friendlyHit)
+        XCTAssertEqual(preparation.fallbackReason, "roll-miss")
+        XCTAssertEqual(preparation.refill(in: grid).count, 3)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        XCTAssertEqual(FriendlyRefillPipeline.scan(in: grid).matches,
+                       MatchDetector().detect(in: grid))
+    }
+
+    func testThreeOrbCascadeRecomputesModeProbabilityAndTargetFromActualWave() {
+        let waves: [([Int], [Double], Int, Double)] = [
+            (Array(repeating: 3, count: 6), [0.10], 6, 0.75),
+            (Array(repeating: 3, count: 6), [0.90, 0.10], 5, 0.75),
+            (Array(repeating: 3, count: 5), [0.90, 0.10], 4, 0.75),
+            (Array(repeating: 3, count: 4), [0.90, 0.10], 3, 0.65),
+            ([3], [0.49], 1, 0.50)
+        ]
+        for (sizes, values, expectedTarget, expectedProbability) in waves {
+            var sequence = values.makeIterator()
+            let decision = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+                removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
+                roll: { _ in sequence.next()! })
+            XCTAssertEqual(decision.mode, .threeOrbStepped)
+            XCTAssertEqual(decision.waveProbability, expectedProbability)
+            XCTAssertEqual(decision.probabilityTarget, expectedTarget)
+        }
+
+        let mixed = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: [3,4],
+            removedOrbCount: 7, emptySlotCount: 7, roll: { _ in 0.64 })
+        XCTAssertEqual(mixed.mode, .existingSchemeB)
+        XCTAssertEqual(mixed.rolls.count, 1)
+        XCTAssertEqual(mixed.requestedSizes, [3,4])
     }
 
     func testFriendlySubsetPriorityPreservesExactRequirements() {
@@ -936,11 +1136,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 grid: grid, previousResolution: previous, controller: SkyfallController(),
                 using: &generator, roll: { index in
                     indices.append(index)
-                    return hit && index == 1 ? 0.30 : 0.80
+                    return hit && index == 9 ? 0.30 : 0.90
                 }
             )
             XCTAssertEqual(preparation.decision.requestedTarget, hit ? 9 : 0)
-            XCTAssertEqual(indices, [1])
+            XCTAssertEqual(indices, hit ? [9] : Array(stride(from: 9, through: 1, by: -1)))
             XCTAssertEqual(preparation.usesFriendlyTypes, hit)
             XCTAssertEqual(preparation.failureCategory, hit ? nil : "probability-miss")
             let refill = RefillController().refillEmptySlots(
