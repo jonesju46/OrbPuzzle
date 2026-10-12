@@ -714,17 +714,36 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(controller.lastFriendlyPlanningFailure, "geometry-impossible")
     }
 
-    func testThreeOrbFriendlyProbabilityTableAndInvalidInputs() {
-        let expected: [Int: Double] = [
-            1: 0.50, 2: 0.65, 3: 0.65, 4: 0.65, 5: 0.75,
-            6: 0.75, 7: 0.75, 8: 0.85, 9: 0.85, 10: 0.85
-        ]
-        for startingCombo in 1...10 {
-            XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(
-                startingCombo: startingCombo), expected[startingCombo]!)
+    func testFriendlyV3ProbabilityTableForEveryValidMatchSizeAndSizeCombo() {
+        func expected(matchSize: Int, sizeCombo: Int) -> Double {
+            switch matchSize {
+            case 3: return sizeCombo == 1 ? 0.50 : sizeCombo <= 4 ? 0.65 : sizeCombo <= 7 ? 0.75 : 0.85
+            case 4: return sizeCombo == 1 ? 0.50 : sizeCombo <= 4 ? 0.65 : 0.75
+            case 5...6: return sizeCombo == 1 ? 0.50 : sizeCombo <= 3 ? 0.65 : 0.75
+            case 7: return sizeCombo == 1 ? 0.50 : sizeCombo <= 3 ? 0.65 : 0.75
+            case 8...9: return sizeCombo == 1 ? 0.50 : sizeCombo == 2 ? 0.65 : 0.75
+            case 10...15: return sizeCombo == 1 ? 0.65 : 0.75
+            default: return 0.75
+            }
         }
-        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(startingCombo: 0), 0)
-        XCTAssertEqual(FriendlyNaturalSkyfallPolicy.threeOrbFriendlyProbability(startingCombo: 11), 0)
+
+        for matchSize in 3...30 {
+            let maximum = 30 / matchSize
+            XCTAssertEqual(FriendlySizeSteppedPolicy.maximumSizeCombo(matchSize: matchSize), maximum)
+            for sizeCombo in 1...maximum {
+                XCTAssertEqual(FriendlySizeSteppedPolicy.probability(
+                    matchSize: matchSize, sizeCombo: sizeCombo)!,
+                    expected(matchSize: matchSize, sizeCombo: sizeCombo),
+                    "size=\(matchSize) combo=\(sizeCombo)")
+            }
+            XCTAssertNil(FriendlySizeSteppedPolicy.probability(
+                matchSize: matchSize, sizeCombo: maximum + 1))
+        }
+        XCTAssertNil(FriendlySizeSteppedPolicy.probability(matchSize: 2, sizeCombo: 1))
+        XCTAssertNil(FriendlySizeSteppedPolicy.probability(matchSize: 31, sizeCombo: 1))
+        XCTAssertNil(FriendlySizeSteppedPolicy.probability(matchSize: 3, sizeCombo: 0))
+        XCTAssertEqual((1...10).map { ThreeOrbSteppedFriendlyPolicy.probability(startingCombo: $0) },
+                       [0.50,0.65,0.65,0.65,0.75,0.75,0.75,0.85,0.85,0.85])
     }
 
     func testThreeOrbFriendlyBoundariesUseStrictLessThanAndStopAtFirstGo() {
@@ -796,24 +815,166 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
-    func testFriendlyPolicyModeIsolationAndExistingSchemeBRemainsSingleSixtyFivePercentRoll() {
+    func testFriendlyV3BucketClassificationUsesMatchSizeAscendingOrder() {
         for sizes in [[3], [3,3,3], Array(repeating: 3, count: 10)] {
             XCTAssertEqual(FriendlyNaturalSkyfallPolicy.mode(for: sizes), .threeOrbStepped)
         }
-        let schemeBRequirements = [[4], [3,4], [3,3,5], [6,6], [30]]
-        for sizes in schemeBRequirements {
-            XCTAssertEqual(FriendlyNaturalSkyfallPolicy.mode(for: sizes), .existingSchemeB)
-            for value in [0.649, 0.650, 0.999] {
-                var calls: [Int] = []
-                let decision = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
-                    removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
-                    roll: { target in calls.append(target); return value })
-                XCTAssertEqual(calls, [1])
-                XCTAssertEqual(decision.waveProbability, 0.65)
-                XCTAssertEqual(decision.friendlyHit, value < 0.65)
-                XCTAssertEqual(decision.requestedSizes, value < 0.65 ? sizes : [])
+        let cases: [([Int], [(Int, Int)])] = [
+            ([3,3,3,3,3,5], [(3,5),(5,1)]),
+            ([3,3,4,4], [(3,2),(4,2)]),
+            ([6,4,5], [(4,1),(5,1),(6,1)]),
+            (Array(repeating: 3, count: 10), [(3,10)]),
+            ([30], [(30,1)])
+        ]
+        for (sizes, expected) in cases {
+            let actual = FriendlySizeSteppedPolicy.buckets(for: sizes).map { ($0.matchSize, $0.sizeCombo) }
+            XCTAssertEqual(actual.map { $0.0 }, expected.map { $0.0 })
+            XCTAssertEqual(actual.map { $0.1 }, expected.map { $0.1 })
+            if Set(sizes) != Set([3]) {
+                XCTAssertEqual(FriendlyNaturalSkyfallPolicy.mode(for: sizes), .multiSizeStepped)
             }
         }
+    }
+
+    func testFriendlyV3BucketsRollIndependentlyAndMergeSelectedSizes() {
+        let sizes = [3,3,3,3,3,5]
+        var values = [0.90, 0.20, 0.10].makeIterator()
+        var targets: [Int] = []
+        let decision = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+            removedOrbCount: 20, emptySlotCount: 20, roll: { target in
+                targets.append(target)
+                return values.next()!
+            })
+        XCTAssertEqual(targets, [5,4,1])
+        XCTAssertEqual(decision.mode, .multiSizeStepped)
+        XCTAssertEqual(decision.bucketDecisions.map(\.matchSize), [3,5])
+        XCTAssertEqual(decision.bucketDecisions.map(\.probability), [0.75,0.50])
+        XCTAssertEqual(decision.bucketDecisions.map(\.attemptedTargets), [[5,4],[1]])
+        XCTAssertEqual(decision.bucketDecisions.map(\.selectedTarget), [4,1])
+        XCTAssertEqual(decision.requestedSizes, [3,3,3,3,5])
+    }
+
+    func testFriendlyV3OneBucketMissDoesNotCancelAnotherBucket() {
+        let sizes = [3,3,5]
+
+        var firstValues = [0.90,0.90,0.10].makeIterator()
+        let onlyFive = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+            removedOrbCount: 11, emptySlotCount: 11, roll: { _ in firstValues.next()! })
+        XCTAssertEqual(onlyFive.bucketDecisions.map(\.selectedTarget), [0,1])
+        XCTAssertEqual(onlyFive.requestedSizes, [5])
+
+        var secondValues = [0.10,0.90].makeIterator()
+        let onlyThree = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+            removedOrbCount: 11, emptySlotCount: 11, roll: { _ in secondValues.next()! })
+        XCTAssertEqual(onlyThree.bucketDecisions.map(\.selectedTarget), [2,0])
+        XCTAssertEqual(onlyThree.requestedSizes, [3,3])
+    }
+
+    func testFriendlyV3SeededRollConsumptionIsReproducible() {
+        let sizes = [3,3,3,3,5,5,6]
+        var firstGenerator = SeededGenerator(seed: 120_301)
+        let first = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+            removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
+            roll: { _ in Double.random(in: 0..<1, using: &firstGenerator) })
+        var secondGenerator = SeededGenerator(seed: 120_301)
+        let second = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: sizes,
+            removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
+            roll: { _ in Double.random(in: 0..<1, using: &secondGenerator) })
+        XCTAssertEqual(first.bucketDecisions, second.bucketDecisions)
+        XCTAssertEqual(first.requestedSizes, second.requestedSizes)
+        XCTAssertEqual(first.bucketDecisions.map(\.matchSize), [3,5,6])
+    }
+
+    func testFriendlyV3EachBucketKeepsItsStartingProbabilityWhileDescending() {
+        let cases: [(Int, Int, Double)] = [
+            (3, 9, 0.85), (4, 7, 0.75), (5, 4, 0.75), (6, 3, 0.65),
+            (7, 4, 0.75), (8, 3, 0.75), (9, 2, 0.65), (10, 2, 0.75),
+            (15, 2, 0.75), (30, 1, 0.75)
+        ]
+        for (matchSize, startingCombo, probability) in cases {
+            let firstGo = FriendlySizeSteppedPolicy.selectBucket(matchSize: matchSize,
+                startingCombo: startingCombo, roll: { _ in probability - 0.001 })
+            XCTAssertEqual(firstGo?.attemptedTargets, [startingCombo])
+            XCTAssertEqual(firstGo?.selectedTarget, startingCombo)
+
+            let decision = FriendlySizeSteppedPolicy.selectBucket(matchSize: matchSize,
+                startingCombo: startingCombo, roll: { target in
+                    target == 1 ? probability - 0.01 : probability
+                })
+            XCTAssertEqual(decision?.attemptedTargets,
+                Array(stride(from: startingCombo, through: 1, by: -1)))
+            XCTAssertEqual(decision?.selectedTarget, 1)
+            XCTAssertTrue(decision?.rolls.allSatisfy { $0.probability == probability } ?? false)
+
+            let allMiss = FriendlySizeSteppedPolicy.selectBucket(matchSize: matchSize,
+                startingCombo: startingCombo, roll: { _ in probability })
+            XCTAssertEqual(allMiss?.attemptedTargets,
+                Array(stride(from: startingCombo, through: 1, by: -1)))
+            XCTAssertEqual(allMiss?.selectedTarget, 0)
+        }
+    }
+
+    func testFriendlyV3MixedBucketsUseOneMergedPlannerAndOneRefill() {
+        let grid = OrbGrid()
+        let sizes = [3,3,3,3,3,5]
+        let previous = ResolveResult(matches: sizes.enumerated().map { index, size in
+            MatchResult(type: OrbType.allCases[index % OrbType.allCases.count],
+                positions: Set((0..<size).map {
+                    GridPosition(row: index % 5, column: $0 % 6)
+                }))
+        })
+        var generator = SeededGenerator(seed: 121_001)
+        var values = [0.90,0.10,0.10].makeIterator()
+        var plannerCalls = 0
+        let preparation = FriendlyRefillPipeline.prepare(grid: grid,
+            previousResolution: previous, controller: SkyfallController(), using: &generator,
+            roll: { _ in values.next()! }, planProvider: { _, slots, requested in
+                plannerCalls += 1
+                XCTAssertEqual(requested.sorted(), [3,3,3,3,5])
+                let groups = [
+                    (0..<3).map { GridPosition(row: 0, column: $0) },
+                    (3..<6).map { GridPosition(row: 0, column: $0) },
+                    (0..<3).map { GridPosition(row: 1, column: $0) },
+                    (3..<6).map { GridPosition(row: 1, column: $0) },
+                    (0..<5).map { GridPosition(row: 2, column: $0) }
+                ]
+                let forcedTypes = Dictionary(uniqueKeysWithValues: groups.enumerated().flatMap { index, group in
+                    group.map { ($0, OrbType.allCases[index % OrbType.allCases.count]) }
+                })
+                let types = slots.map { position in
+                    forcedTypes[position]
+                        ?? OrbType.allCases[(position.row * 2 + position.column) % OrbType.allCases.count]
+                }
+                return FriendlyRefillPlan(types: types, plannedTarget: groups.count,
+                    forcedTypes: forcedTypes, forcedGroups: groups)
+            })
+        XCTAssertEqual(plannerCalls, 1)
+        XCTAssertEqual(preparation.decision.requestedSizes, [3,3,3,3,5])
+        XCTAssertTrue(preparation.fullSuccess)
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
+        XCTAssertEqual(preparation.directMatches(MatchDetector().detect(in: grid))
+            .map(\.matchSize).sorted(), [3,3,3,3,5])
+    }
+
+    func testFriendlyV3AllBucketsMissUsesNormalRefillWithoutPlanner() {
+        let grid = OrbGrid()
+        let previous = ResolveResult(matches: [
+            MatchResult(type: .water, positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
+            MatchResult(type: .fire, positions: Set((0..<5).map { GridPosition(row: 1, column: $0) }))
+        ])
+        var generator = SeededGenerator(seed: 121_002)
+        let preparation = FriendlyRefillPipeline.prepare(grid: grid,
+            previousResolution: previous, controller: SkyfallController(), using: &generator,
+            roll: { _ in 0.99 },
+            planProvider: { _, _, _ in XCTFail("All buckets MISS must skip planner"); return nil })
+        XCTAssertEqual(preparation.decision.bucketDecisions.map(\.selectedTarget), [0,0])
+        XCTAssertTrue(preparation.decision.requestedSizes.isEmpty)
+        XCTAssertEqual(preparation.fallbackReason, "roll-miss")
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
+        XCTAssertEqual(allOrbIDs(in: grid).count, 30)
     }
 
     func testThreeOrbPlannerReceivesSelectedTargetWithoutRerollingOnFailure() {
@@ -920,22 +1081,61 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 removedOrbCount: sizes.reduce(0, +), emptySlotCount: sizes.reduce(0, +),
                 roll: { _ in sequence.next()! })
             XCTAssertEqual(decision.mode, .threeOrbStepped)
-            XCTAssertEqual(decision.waveProbability, expectedProbability)
+            XCTAssertEqual(decision.bucketDecisions.first?.probability, expectedProbability)
             XCTAssertEqual(decision.probabilityTarget, expectedTarget)
         }
 
+        var mixedValues = [0.64,0.49].makeIterator()
         let mixed = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: [3,4],
-            removedOrbCount: 7, emptySlotCount: 7, roll: { _ in 0.64 })
-        XCTAssertEqual(mixed.mode, .existingSchemeB)
-        XCTAssertEqual(mixed.rolls.count, 1)
+            removedOrbCount: 7, emptySlotCount: 7, roll: { _ in mixedValues.next()! })
+        XCTAssertEqual(mixed.mode, .multiSizeStepped)
+        XCTAssertEqual(mixed.rolls.count, 2)
         XCTAssertEqual(mixed.requestedSizes, [3,4])
     }
 
     func testFriendlySubsetPriorityPreservesExactRequirements() {
-        let subsets = FriendlyNaturalSkyfallPolicy.subsets(of: [4,4,5,6])
-        XCTAssertEqual(subsets.prefix(4).map { $0 }, [[6,5,4,4], [6,5,4], [6,4,4], [5,4,4]])
+        let subsets = FriendlyNaturalSkyfallPolicy.subsets(of: [3,3,3,3,5])
+        XCTAssertEqual(subsets.prefix(3).map { $0 }, [[5,3,3,3,3], [3,3,3,3], [5,3,3,3]])
         XCTAssertEqual(Set(subsets).count, subsets.count)
-        XCTAssertFalse(subsets.contains([3,3,3]))
+        XCTAssertLessThan(subsets.firstIndex(of: [3,3,3,3])!, subsets.firstIndex(of: [5,3,3,3])!)
+    }
+
+    func testFriendlyV3PartialFallbackPrefersThreeOrbGroupsAtEqualGroupCount() {
+        let grid = OrbGrid()
+        let sizes = [3,3,3,3,5]
+        let previous = ResolveResult(matches: sizes.enumerated().map { index, size in
+            MatchResult(type: OrbType.allCases[index % OrbType.allCases.count],
+                positions: Set((0..<size).map { GridPosition(row: index, column: $0 % 6) }))
+        })
+        var generator = SeededGenerator(seed: 121_003)
+        var attempts: [[Int]] = []
+        let preparation = FriendlyRefillPipeline.prepare(grid: grid,
+            previousResolution: previous, controller: SkyfallController(), using: &generator,
+            roll: { _ in 0.10 }, planProvider: { _, slots, requested in
+                attempts.append(requested)
+                guard requested == [3,3,3,3] else { return nil }
+                let groups = [
+                    (0..<3).map { GridPosition(row: 0, column: $0) },
+                    (3..<6).map { GridPosition(row: 0, column: $0) },
+                    (0..<3).map { GridPosition(row: 1, column: $0) },
+                    (3..<6).map { GridPosition(row: 1, column: $0) }
+                ]
+                let forcedTypes = Dictionary(uniqueKeysWithValues: groups.enumerated().flatMap { index, group in
+                    group.map { ($0, OrbType.allCases[index]) }
+                })
+                let types = slots.map { position in
+                    forcedTypes[position]
+                        ?? OrbType.allCases[(position.row * 2 + position.column) % OrbType.allCases.count]
+                }
+                return FriendlyRefillPlan(types: types, plannedTarget: groups.count,
+                    forcedTypes: forcedTypes, forcedGroups: groups)
+            })
+        XCTAssertEqual(attempts, [[5,3,3,3,3], [3,3,3,3]])
+        XCTAssertTrue(preparation.usesFriendlyTypes)
+        XCTAssertFalse(preparation.fullSuccess)
+        XCTAssertEqual(preparation.plannedSizes, [3,3,3,3])
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
     }
 
     func testFriendlyMixedRequirementsValidateActualForcedGroups() {
@@ -953,8 +1153,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
             var rolls = 0
             let preparation = FriendlyRefillPipeline.prepare(grid: grid, previousResolution: previous,
                 controller: SkyfallController(), using: &generator, roll: { _ in rolls += 1; return 0.3 })
-            XCTAssertEqual(rolls, 1)
-            XCTAssertEqual(preparation.decision.requestedSizes, previous.matches.map { $0.matchSize })
+            XCTAssertEqual(rolls, Set(sizes).count)
+            XCTAssertEqual(preparation.decision.requestedSizes, sizes.sorted())
             XCTAssertTrue(preparation.usesFriendlyTypes, "sizes=\(sizes) failure=\(preparation.fallbackReason ?? "none")")
             XCTAssertEqual(preparation.refill(in: grid).count, 30)
             XCTAssertTrue(grid.emptyPositions().isEmpty)
@@ -1050,8 +1250,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 return SkyfallController().makeFriendlyNaturalRefill(grid: board, refillSlots: slots,
                     requestedSizes: sizes, using: &rng)
             })
-        XCTAssertEqual(rolls, 1)
-        XCTAssertEqual(attempts, [[5,4,4], [5,4]])
+        XCTAssertEqual(rolls, 2)
+        XCTAssertEqual(attempts, [[5,4,4], [4,4], [5,4]])
         XCTAssertTrue(preparation.usesFriendlyTypes)
         XCTAssertFalse(preparation.fullSuccess)
         XCTAssertEqual(preparation.plannedSizes.sorted(), [4,5])
@@ -1059,9 +1259,10 @@ final class OrbPuzzleEngineTests: XCTestCase {
         let next = ResolveResult(matches: MatchDetector().detect(in: grid))
         _ = grid.remove(next.removedPositions)
         _ = grid.collapse()
+        let rollsBeforeNextWave = rolls
         let nextPreparation = FriendlyRefillPipeline.prepare(grid: grid, previousResolution: next,
             controller: SkyfallController(), using: &generator, roll: { _ in rolls += 1; return 0.999 })
-        XCTAssertEqual(rolls, 2)
+        XCTAssertGreaterThan(rolls, rollsBeforeNextWave)
         XCTAssertEqual(nextPreparation.decision.previousSizes, next.matches.map { $0.matchSize })
         XCTAssertEqual(nextPreparation.decision.requestedSizes, [])
         XCTAssertEqual(nextPreparation.refill(in: grid).count, next.removedOrbCount)

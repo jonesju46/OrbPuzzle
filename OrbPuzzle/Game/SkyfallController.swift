@@ -9,7 +9,18 @@ struct FriendlyRefillRoll: Equatable, Sendable {
 
 enum FriendlyRefillPolicyMode: String, Equatable, Sendable {
     case threeOrbStepped = "ThreeOrbStepped"
-    case existingSchemeB = "ExistingSchemeB"
+    case multiSizeStepped = "MultiSizeStepped"
+}
+
+struct FriendlySizeBucketDecision: Equatable, Sendable {
+    let matchSize: Int
+    let startingCombo: Int
+    let probability: Double
+    let rolls: [FriendlyRefillRoll]
+    let selectedTarget: Int
+
+    var attemptedTargets: [Int] { rolls.map(\.groupCount) }
+    var requestedSizes: [Int] { Array(repeating: matchSize, count: selectedTarget) }
 }
 
 struct FriendlyRefillDecision: Equatable, Sendable {
@@ -17,22 +28,14 @@ struct FriendlyRefillDecision: Equatable, Sendable {
     let removedOrbCount: Int
     let emptySlotCount: Int
     let mode: FriendlyRefillPolicyMode
-    let waveProbability: Double
-    let rolls: [FriendlyRefillRoll]
-    let probabilityTarget: Int
+    let bucketDecisions: [FriendlySizeBucketDecision]
     var selectedTarget: Int
     var previousResolvedGroupCount: Int { previousSizes.count }
     var candidateMaxGroups: Int { previousSizes.count }
+    var rolls: [FriendlyRefillRoll] { bucketDecisions.flatMap(\.rolls) }
+    var probabilityTarget: Int { bucketDecisions.reduce(0) { $0 + $1.selectedTarget } }
     var friendlyHit: Bool { probabilityTarget > 0 }
-    var requestedSizes: [Int] {
-        guard friendlyHit else { return [] }
-        switch mode {
-        case .threeOrbStepped:
-            return Array(repeating: 3, count: probabilityTarget)
-        case .existingSchemeB:
-            return previousSizes
-        }
-    }
+    var requestedSizes: [Int] { bucketDecisions.flatMap(\.requestedSizes) }
     var requestedTarget: Int { requestedSizes.count }
 }
 
@@ -58,41 +61,115 @@ enum ThreeOrbSteppedFriendlyPolicy {
     static let supportedCombos = 1...10
 
     static func probability(startingCombo: Int) -> Double {
-        switch startingCombo {
-        case 1: return 0.50
-        case 2...4: return 0.65
-        case 5...7: return 0.75
-        case 8...10: return 0.85
-        default: return 0
-        }
+        FriendlySizeSteppedPolicy.probability(matchSize: 3, sizeCombo: startingCombo) ?? 0
     }
 
     static func selectTarget(startingCombo: Int,
                              roll: (Int) -> Double) -> (rolls: [FriendlyRefillRoll], target: Int) {
-        guard supportedCombos.contains(startingCombo) else { return ([], 0) }
-        let waveProbability = probability(startingCombo: startingCombo)
+        guard let decision = FriendlySizeSteppedPolicy.selectBucket(
+            matchSize: 3, startingCombo: startingCombo, roll: roll) else { return ([], 0) }
+        return (decision.rolls, decision.selectedTarget)
+    }
+}
+
+enum FriendlySizeSteppedPolicy {
+    static func maximumSizeCombo(matchSize: Int) -> Int {
+        guard (3...30).contains(matchSize) else { return 0 }
+        return 30 / matchSize
+    }
+
+    static func probability(matchSize: Int, sizeCombo: Int) -> Double? {
+        let maximum = maximumSizeCombo(matchSize: matchSize)
+        guard maximum > 0, sizeCombo >= 1, sizeCombo <= maximum else { return nil }
+        switch matchSize {
+        case 3:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2...4: return 0.65
+            case 5...7: return 0.75
+            case 8...10: return 0.85
+            default: return nil
+            }
+        case 4:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2...4: return 0.65
+            case 5...7: return 0.75
+            default: return nil
+            }
+        case 5:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2...3: return 0.65
+            case 4...6: return 0.75
+            default: return nil
+            }
+        case 6:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2...3: return 0.65
+            case 4...5: return 0.75
+            default: return nil
+            }
+        case 7:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2...3: return 0.65
+            case 4: return 0.75
+            default: return nil
+            }
+        case 8...9:
+            switch sizeCombo {
+            case 1: return 0.50
+            case 2: return 0.65
+            case 3: return 0.75
+            default: return nil
+            }
+        case 10...15:
+            return sizeCombo == 1 ? 0.65 : 0.75
+        case 16...30:
+            return 0.75
+        default:
+            return nil
+        }
+    }
+
+    static func buckets(for previousSizes: [Int]) -> [(matchSize: Int, sizeCombo: Int)] {
+        Dictionary(grouping: previousSizes, by: { $0 }).map {
+            (matchSize: $0.key, sizeCombo: $0.value.count)
+        }.sorted { $0.matchSize < $1.matchSize }
+    }
+
+    static func selectBucket(matchSize: Int, startingCombo: Int,
+                             roll: (Int) -> Double) -> FriendlySizeBucketDecision? {
+        guard let waveProbability = probability(matchSize: matchSize, sizeCombo: startingCombo) else {
+            return nil
+        }
         var results: [FriendlyRefillRoll] = []
         for candidate in stride(from: startingCombo, through: 1, by: -1) {
             let value = roll(candidate)
             let succeeded = value < waveProbability
             results.append(FriendlyRefillRoll(groupCount: candidate, probability: waveProbability,
                                               roll: value, succeeded: succeeded))
-            if succeeded { return (results, candidate) }
+            if succeeded {
+                return FriendlySizeBucketDecision(matchSize: matchSize, startingCombo: startingCombo,
+                    probability: waveProbability, rolls: results, selectedTarget: candidate)
+            }
         }
-        return (results, 0)
+        return FriendlySizeBucketDecision(matchSize: matchSize, startingCombo: startingCombo,
+            probability: waveProbability, rolls: results, selectedTarget: 0)
     }
 }
 
 enum FriendlyNaturalSkyfallPolicy {
     static let maximumGroupCount = 10
-    static let probability = 0.65
 
     static func mode(for previousSizes: [Int]) -> FriendlyRefillPolicyMode {
         if previousSizes.count >= 1 && previousSizes.count <= maximumGroupCount
             && previousSizes.allSatisfy({ $0 == 3 }) {
             return .threeOrbStepped
         }
-        return .existingSchemeB
+        return .multiSizeStepped
     }
 
     static func threeOrbFriendlyProbability(startingCombo: Int) -> Double {
@@ -104,25 +181,20 @@ enum FriendlyNaturalSkyfallPolicy {
         precondition(previousSizes.allSatisfy { (3...30).contains($0) })
         precondition(previousSizes.count <= maximumGroupCount && previousSizes.reduce(0, +) <= 30)
         let policyMode = mode(for: previousSizes)
-        if policyMode == .threeOrbStepped {
-            let waveProbability = threeOrbFriendlyProbability(startingCombo: previousSizes.count)
-            let stepped = ThreeOrbSteppedFriendlyPolicy.selectTarget(
-                startingCombo: previousSizes.count, roll: roll)
-            return FriendlyRefillDecision(previousSizes: previousSizes, removedOrbCount: removedOrbCount,
-                emptySlotCount: emptySlotCount, mode: policyMode, waveProbability: waveProbability,
-                rolls: stepped.rolls, probabilityTarget: stepped.target, selectedTarget: 0)
+        let bucketDecisions = FriendlySizeSteppedPolicy.buckets(for: previousSizes).map { bucket in
+            guard let decision = FriendlySizeSteppedPolicy.selectBucket(
+                matchSize: bucket.matchSize, startingCombo: bucket.sizeCombo, roll: roll) else {
+                preconditionFailure("Invalid Friendly bucket size=\(bucket.matchSize) combo=\(bucket.sizeCombo)")
+            }
+            return decision
         }
-
-        let value = roll(1)
-        let succeeded = value < probability
         return FriendlyRefillDecision(previousSizes: previousSizes, removedOrbCount: removedOrbCount,
-            emptySlotCount: emptySlotCount, mode: policyMode, waveProbability: probability,
-            rolls: [FriendlyRefillRoll(groupCount: previousSizes.count, probability: probability,
-                                      roll: value, succeeded: succeeded)],
-            probabilityTarget: succeeded ? previousSizes.count : 0, selectedTarget: 0)
+            emptySlotCount: emptySlotCount, mode: policyMode,
+            bucketDecisions: bucketDecisions, selectedTarget: 0)
     }
 
-    // Unique multisets: maximize groups first, then requested orbs. No probability here.
+    // Unique multisets: maximize groups, preserve three-orb groups, then
+    // compare the remaining size counts before total requested orbs.
     static func subsets(of sizes: [Int]) -> [[Int]] {
         var unique = Set<[Int]>()
         for mask in 1..<(1 << sizes.count) {
@@ -130,6 +202,14 @@ enum FriendlyNaturalSkyfallPolicy {
         }
         return unique.sorted {
             if $0.count != $1.count { return $0.count > $1.count }
+            let leftThree = $0.filter { $0 == 3 }.count
+            let rightThree = $1.filter { $0 == 3 }.count
+            if leftThree != rightThree { return leftThree > rightThree }
+            for size in 4...30 {
+                let leftCount = $0.filter { $0 == size }.count
+                let rightCount = $1.filter { $0 == size }.count
+                if leftCount != rightCount { return leftCount > rightCount }
+            }
             let left = $0.reduce(0, +), right = $1.reduce(0, +)
             if left != right { return left > right }
             return $1.lexicographicallyPrecedes($0)
@@ -915,11 +995,14 @@ enum FriendlyRefillPipeline {
         var attempts = 0
         var waveNodes = 0
 #if DEBUG
-        print("[FRIENDLY_POLICY] mode=\(decision.mode.rawValue) previousSizes=\(decision.previousSizes) startingCombo=\(decision.previousResolvedGroupCount) waveProbability=\(decision.waveProbability)")
-        for item in decision.rolls {
-            print("[FRIENDLY_ROLL] target=\(item.groupCount) roll=\(item.roll) result=\(item.succeeded ? "GO" : "MISS")")
+        print("[FRIENDLY_V3] mode=\(decision.mode.rawValue) previousSizes=\(decision.previousSizes) buckets=\(decision.bucketDecisions.count) slots=\(slots.count)")
+        for bucket in decision.bucketDecisions {
+            print("[FRIENDLY_BUCKET] matchSize=\(bucket.matchSize) startingCombo=\(bucket.startingCombo) probability=\(bucket.probability) selectedTarget=\(bucket.selectedTarget)")
+            for item in bucket.rolls {
+                print("[FRIENDLY_ROLL] size=\(bucket.matchSize) target=\(item.groupCount) roll=\(item.roll) result=\(item.succeeded ? "GO" : "MISS")")
+            }
         }
-        print("[FRIENDLY] status=\(decision.friendlyHit ? "PROBABILITY_GO" : "ALL_PROBABILITY_MISS") probabilityTarget=\(decision.probabilityTarget) requestedSizes=\(requested) slots=\(slots.count)")
+        print("[FRIENDLY_MERGED] status=\(decision.friendlyHit ? "PROBABILITY_GO" : "ALL_PROBABILITY_MISS") requestedSizes=\(requested) requestedGroups=\(requested.count) requestedOrbs=\(requested.reduce(0, +))")
         print("[FRIENDLY_BOARD] snapshot=\(grid.cells.map { $0.map { $0?.type.rawValue ?? "_" } }) slots=\(describe(slots))")
         for size in analyses.keys.sorted() {
             let analysis = analyses[size]!
@@ -953,7 +1036,7 @@ enum FriendlyRefillPipeline {
                         if direct.map({ $0.matchSize }).sorted() == sizes.sorted() {
                             decision.selectedTarget = sizes.count
 #if DEBUG
-                            print("[FRIENDLY_RESULT] requestedSizes=\(requested) plannedSizes=\(sizes) detectedSizes=\(direct.map { $0.matchSize }) fullSuccess=\(sizes.sorted() == requested.sorted()) partial=\(sizes.count < requested.count) searchLimited=\(limited) attempts=\(attempts)/\(subsetAttemptLimit) waveNodes=\(waveNodes)/\(waveNodeLimit)")
+                            print("[FRIENDLY_RESULT] status=\(sizes.sorted() == requested.sorted() ? "FULL" : "PARTIAL") requestedSizes=\(requested) plannedSizes=\(sizes) detectedSizes=\(direct.map { $0.matchSize }) searchLimited=\(limited) attempts=\(attempts)/\(subsetAttemptLimit) waveNodes=\(waveNodes)/\(waveNodeLimit)")
 #endif
                             return FriendlyRefillPreparation(slots: slots, removedOrbCount: previousResolution.removedOrbCount,
                                 decision: decision, planCalled: true, plan: plan, types: plan.types,
