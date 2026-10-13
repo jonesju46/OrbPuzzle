@@ -1199,6 +1199,7 @@ final class SkyfallController {
 struct FriendlyRefillPreparation: Sendable {
     let slots: [GridPosition]
     let removedOrbCount: Int
+    let sourceTemplates: [FriendlyGroupTemplate]
     let decision: FriendlyRefillDecision
     let planCalled: Bool
     let plan: FriendlyRefillPlan?
@@ -1257,6 +1258,20 @@ struct FriendlyRefillPreparation: Sendable {
 }
 
 enum FriendlyRefillPipeline {
+    /// Captures the exact normalized groups found after a refill. This is the
+    /// only input allowed to seed the next Friendly decision and V4 templates;
+    /// requested/direct-template matches are validation metadata only.
+    static func cascadeResolution(from scan: StableBoardScan) -> ResolveResult? {
+        guard !scan.matches.isEmpty else { return nil }
+        return ResolveResult(matches: scan.matches)
+    }
+
+    static func templates(from resolution: ResolveResult) -> [FriendlyGroupTemplate] {
+        resolution.matches.enumerated().map {
+            FriendlyGroupTemplate(sourceIndex: $0.offset, match: $0.element)
+        }
+    }
+
     static func prepare(
         grid: OrbGrid,
         previousResolution: ResolveResult,
@@ -1300,9 +1315,7 @@ enum FriendlyRefillPipeline {
         let requested = decision.requestedSizes
         let called = decision.friendlyHit && !requested.isEmpty
         let analyzerStart = ProcessInfo.processInfo.systemUptime
-        let sourceTemplates = previousResolution.matches.enumerated().map {
-            FriendlyGroupTemplate(sourceIndex: $0.offset, match: $0.element)
-        }
+        let sourceTemplates = templates(from: previousResolution)
         let templateAttempts = called ? FriendlyNaturalSkyfallPolicy.templateSubsets(
             from: sourceTemplates, bucketDecisions: decision.bucketDecisions) : []
         let analyzerMs = (ProcessInfo.processInfo.systemUptime - analyzerStart) * 1_000
@@ -1351,7 +1364,8 @@ enum FriendlyRefillPipeline {
                         print("[FRIENDLY_V4_RESULT] status=\(direct.map(\.matchSize).sorted() == requested.sorted() ? "FULL" : "PARTIAL") exactCopies=\(copies) requestedSizes=\(requested) detectedSizes=\(direct.map(\.matchSize)) attempts=\(attempts)/\(subsetAttemptLimit) waveNodes=\(waveNodes)/\(waveNodeLimit)")
 #endif
                         return FriendlyRefillPreparation(slots: slots, removedOrbCount: previousResolution.removedOrbCount,
-                            decision: decision, planCalled: true, plan: plan, types: plan.types,
+                            sourceTemplates: sourceTemplates, decision: decision,
+                            planCalled: true, plan: plan, types: plan.types,
                             validationDetectedGroups: matches.count, directGroupCount: direct.count,
                             usesFriendlyTypes: true, fallbackReason: nil,
                             plannerTiming: FriendlyPlannerTiming(analyzerMs: analyzerMs,
@@ -1384,7 +1398,8 @@ enum FriendlyRefillPipeline {
                             decision.selectedTarget = sizes.count
                             return FriendlyRefillPreparation(slots: slots,
                                 removedOrbCount: previousResolution.removedOrbCount,
-                                decision: decision, planCalled: true, plan: plan, types: plan.types,
+                                sourceTemplates: sourceTemplates, decision: decision,
+                                planCalled: true, plan: plan, types: plan.types,
                                 validationDetectedGroups: matches.count, directGroupCount: direct.count,
                                 usesFriendlyTypes: true, fallbackReason: nil, searchLimited: limited)
                         }
@@ -1405,7 +1420,8 @@ enum FriendlyRefillPipeline {
         let types = controller.makeNonForcedRefill(grid: grid, refillSlots: slots, using: &generator)
             ?? slots.map { _ in OrbType.allCases.randomElement(using: &generator) ?? .fire }
         return FriendlyRefillPreparation(slots: slots, removedOrbCount: previousResolution.removedOrbCount,
-            decision: decision, planCalled: called, plan: nil, types: types,
+            sourceTemplates: sourceTemplates, decision: decision,
+            planCalled: called, plan: nil, types: types,
             validationDetectedGroups: nil, directGroupCount: 0, usesFriendlyTypes: false,
             fallbackReason: reason,
             plannerTiming: FriendlyPlannerTiming(analyzerMs: analyzerMs,

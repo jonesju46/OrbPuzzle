@@ -1682,6 +1682,113 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(grid.emptyPositions().isEmpty)
     }
 
+    func testFriendlyV4CascadeUsesActualMixedNormalizedGroupsForNextPolicy() throws {
+        let cases: [(String, Set<GridPosition>, Set<GridPosition>)] = [
+            ("mixed-three",
+             Set((0..<3).map { GridPosition(row: 4, column: $0) }),
+             [GridPosition(row: 4, column: 2)]),
+            ("mixed-four",
+             Set((0..<4).map { GridPosition(row: 4, column: $0) }),
+             [GridPosition(row: 4, column: 2), GridPosition(row: 4, column: 3)]),
+            ("mixed-five",
+             Set((0..<5).map { GridPosition(row: 4, column: $0) }),
+             [GridPosition(row: 4, column: 3), GridPosition(row: 4, column: 4)]),
+            ("mixed-six",
+             Set((0..<6).map { GridPosition(row: 4, column: $0) }),
+             [GridPosition(row: 4, column: 4), GridPosition(row: 4, column: 5)]),
+            ("extended-vertical-five",
+             Set((0..<5).map { GridPosition(row: $0, column: 5) }),
+             [GridPosition(row: 3, column: 5), GridPosition(row: 4, column: 5)]),
+            ("mixed-L",
+             [GridPosition(row: 0, column: 0), GridPosition(row: 1, column: 0),
+              GridPosition(row: 2, column: 0), GridPosition(row: 2, column: 1),
+              GridPosition(row: 2, column: 2)],
+             [GridPosition(row: 2, column: 1), GridPosition(row: 2, column: 2)]),
+            ("mixed-T",
+             [GridPosition(row: 0, column: 0), GridPosition(row: 0, column: 1),
+              GridPosition(row: 0, column: 2), GridPosition(row: 1, column: 1),
+              GridPosition(row: 2, column: 1)],
+             [GridPosition(row: 1, column: 1), GridPosition(row: 2, column: 1)]),
+            ("mixed-cross",
+             Set((0..<5).map { GridPosition(row: $0, column: 2) }
+                + (1...3).map { GridPosition(row: 2, column: $0) }),
+             [GridPosition(row: 2, column: 1), GridPosition(row: 2, column: 3)])
+        ]
+
+        for (index, item) in cases.enumerated() {
+            let (name, expectedPositions, newPositions) = item
+            var board = matchTestBoardTypes()
+            for position in expectedPositions.subtracting(newPositions) {
+                board[position.row][position.column] = .heart
+            }
+            let grid = OrbGrid(types: board)
+            _ = grid.remove(newPositions)
+            let refillSlots = grid.emptyPositions()
+            XCTAssertEqual(Set(refillSlots), newPositions, name)
+            XCTAssertEqual(grid.refill(types: Array(repeating: .heart, count: refillSlots.count),
+                                       at: refillSlots).count, refillSlots.count, name)
+
+            let scan = FriendlyRefillPipeline.scan(in: grid)
+            let actual = try XCTUnwrap(scan.matches.first {
+                $0.type == .heart && $0.positions == expectedPositions
+            }, name)
+            let cascade = try XCTUnwrap(FriendlyRefillPipeline.cascadeResolution(from: scan), name)
+            XCTAssertEqual(cascade.matches, [actual], name)
+
+            // V4 direct-plan validation remains strict: a match containing a
+            // preserved orb cannot masquerade as an exact refill-only template.
+            let template = FriendlyGroupTemplate(sourceIndex: 0, match: actual)
+            let placement = FriendlyTemplatePlacement(template: template,
+                                                      positions: Array(expectedPositions))
+            let validationPlan = FriendlyRefillPlan(types: [], plannedTarget: 1,
+                forcedGroups: [Array(expectedPositions)], templatePlacements: [placement])
+            XCTAssertTrue(FriendlyRefillPipeline.directMatches(scan.matches,
+                plan: validationPlan, slots: refillSlots).isEmpty, name)
+
+            _ = grid.remove(cascade.removedPositions)
+            _ = grid.collapse()
+            var generator = SeededGenerator(seed: UInt64(96_000 + index))
+            var plannerInputs: [[Int]] = []
+            let next = FriendlyRefillPipeline.prepare(grid: grid,
+                previousResolution: cascade, controller: SkyfallController(),
+                using: &generator, roll: { _ in 0 },
+                planProvider: { _, _, requested in
+                    plannerInputs.append(requested)
+                    return nil
+                })
+            XCTAssertEqual(next.decision.previousSizes, [expectedPositions.count], name)
+            XCTAssertEqual(next.decision.requestedSizes, [expectedPositions.count], name)
+            XCTAssertEqual(plannerInputs.first, [expectedPositions.count], name)
+            XCTAssertEqual(next.sourceTemplates, [template], name)
+        }
+    }
+
+    func testFriendlyV4ActualCascadeMayStopOnlyAfterNextWaveProbabilityMiss() throws {
+        let positions = Set((0..<3).map { GridPosition(row: 4, column: $0) })
+        let scan = StableBoardScan(matches: [MatchResult(type: .water, positions: positions)])
+        let actualResolution = try XCTUnwrap(
+            FriendlyRefillPipeline.cascadeResolution(from: scan)
+        )
+        let grid = OrbGrid(types: matchTestBoardTypes())
+        _ = grid.remove(positions)
+        _ = grid.collapse()
+        var generator = SeededGenerator(seed: 96_100)
+        let next = FriendlyRefillPipeline.prepare(grid: grid,
+            previousResolution: actualResolution, controller: SkyfallController(),
+            using: &generator, roll: { _ in 0.99 },
+            planProvider: { _, _, _ in
+                XCTFail("All probability MISS must not invoke the planner")
+                return nil
+            })
+
+        XCTAssertEqual(next.sourceTemplates,
+            [FriendlyGroupTemplate(sourceIndex: 0, match: actualResolution.matches[0])])
+        XCTAssertEqual(next.decision.bucketDecisions.first?.attemptedTargets, [1])
+        XCTAssertEqual(next.decision.bucketDecisions.first?.selectedTarget, 0)
+        XCTAssertEqual(next.failureCategory, "probability-miss")
+        XCTAssertFalse(next.planCalled)
+    }
+
     func testRefillAnimationStartsAboveBoardAndSchedulesEveryNewNode() {
         for refillCount in [3, 9, 15, 21, 27, 30] {
             let grid = OrbGrid(types: matchTestBoardTypes())

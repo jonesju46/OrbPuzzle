@@ -747,14 +747,18 @@ final class GameScene: SKScene {
     }
 
     private func process(matches: [MatchResult], source: ComboSource, resolveID: UInt) {
+        process(result: ResolveResult(matches: matches), source: source, resolveID: resolveID)
+    }
+
+    private func process(result resolveResult: ResolveResult,
+                         source: ComboSource, resolveID: UInt) {
         guard resolveID == activeResolveID, resolveLifecycle.acceptsSkyfallCompletion else {
             logStaleCompletion("process")
             return
         }
-        let resolveResult = ResolveResult(matches: matches)
 #if DEBUG
         let traceTag = source == .manual ? "MANUAL_RESOLVE" : "SKYFALL_RESOLVE"
-        print("[\(traceTag)] resolveID=\(resolveID) groupCount=\(resolveResult.comboCount) groupSizes=\(matches.map { $0.positions.count }) removedPositions=\(FriendlyRefillPipeline.describe(Array(resolveResult.removedPositions))) removedCount=\(resolveResult.removedOrbCount)")
+        print("[\(traceTag)] resolveID=\(resolveID) groupCount=\(resolveResult.comboCount) groupSizes=\(resolveResult.matches.map { $0.positions.count }) removedPositions=\(FriendlyRefillPipeline.describe(Array(resolveResult.removedPositions))) removedCount=\(resolveResult.removedOrbCount)")
 #endif
         execute(
             resolveResult.steps,
@@ -972,6 +976,10 @@ final class GameScene: SKScene {
 #if DEBUG
                 let timing = preparation.plannerTiming
                 print("[PLANNER_TIME] analyzerMs=\(String(format: "%.2f", timing.analyzerMs)) candidateMs=\(String(format: "%.2f", timing.candidateMs)) searchMs=\(String(format: "%.2f", timing.searchMs)) validationMs=\(String(format: "%.2f", timing.validationMs)) totalMs=\(String(format: "%.2f", totalMs)) mainThread=\(plannerRanOnMainThread)")
+                let outcome = preparation.usesFriendlyTypes
+                    ? (preparation.fullSuccess ? "full-plan" : "partial-plan")
+                    : (preparation.failureCategory ?? "assignment-failure")
+                print("[CASCADE_POLICY] resolveID=\(resolveID) actualSizes=\(preparation.sourceTemplates.map(\.matchSize)) templateTypes=\(preparation.sourceTemplates.map { $0.orbType.rawValue }) outcome=\(outcome) requestedSizes=\(preparation.decision.requestedSizes) plannedSizes=\(preparation.plannedSizes)")
 #endif
                 self.commitRefillAndContinue(refillSlots: refillSlots,
                     expectedRefillCount: expectedRefillCount, resolveID: resolveID,
@@ -1119,8 +1127,15 @@ final class GameScene: SKScene {
             ? FriendlyRefillPipeline.scan(in: grid)
             : StableBoardScan(matches: matchDetector.detect(in: grid))
         let matches = stableBoard.matches
+        let cascadeResolution = FriendlyRefillPipeline.cascadeResolution(from: stableBoard)
 #if DEBUG
         print("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
+        let newPositions = Set(result.spawns.map(\.destination))
+        let compositions = matches.map { match in
+            let newCount = match.positions.intersection(newPositions).count
+            return "\(match.type.rawValue):size=\(match.matchSize):new=\(newCount):preserved=\(match.matchSize - newCount)"
+        }
+        print("[CASCADE_MATCH] resolveID=\(resolveID) groups=\(compositions)")
         if friendlyPreparation != nil {
             friendlyDebugDetectedGroups = matches.count
             if let preparation = friendlyPreparation {
@@ -1169,10 +1184,19 @@ final class GameScene: SKScene {
 
         // Every refill path ends at the same stable-board full-grid scan.
         // Never finish while MatchDetector still reports a 3+ group.
-        if !stableBoard.canFinishResolve {
-            process(matches: matches, source: .skyfall, resolveID: resolveID)
+        if let cascadeResolution {
+#if DEBUG
+            let source = isControlledSkyfallRefill
+                ? "controlled"
+                : (isFriendlyNaturalRefill ? "friendly" : "natural")
+            print("[CASCADE] resolveID=\(resolveID) source=\(source) action=resolve actualSizes=\(cascadeResolution.matches.map(\.matchSize)) nextTemplateSource=actualNormalizedGroups")
+#endif
+            process(result: cascadeResolution, source: .skyfall, resolveID: resolveID)
             return
         }
+#if DEBUG
+        print("[CASCADE] resolveID=\(resolveID) action=stable reason=no-normalized-match")
+#endif
 
         if isControlledSkyfallRefill || isFriendlyNaturalRefill {
 #if DEBUG
