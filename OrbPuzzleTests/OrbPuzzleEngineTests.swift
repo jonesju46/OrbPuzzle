@@ -717,7 +717,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
     func testFriendlyV3ProbabilityTableForEveryValidMatchSizeAndSizeCombo() {
         func expected(matchSize: Int, sizeCombo: Int) -> Double {
             switch matchSize {
-            case 3: return sizeCombo == 1 ? 0.50 : sizeCombo <= 4 ? 0.65 : sizeCombo <= 7 ? 0.75 : 0.85
+            case 3: return sizeCombo == 1 ? 0.50 : sizeCombo <= 4 ? 0.55 : sizeCombo <= 7 ? 0.65 : 0.75
             case 4: return sizeCombo == 1 ? 0.50 : sizeCombo <= 4 ? 0.65 : 0.75
             case 5...6: return sizeCombo == 1 ? 0.50 : sizeCombo <= 3 ? 0.65 : 0.75
             case 7: return sizeCombo == 1 ? 0.50 : sizeCombo <= 3 ? 0.65 : 0.75
@@ -743,7 +743,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(FriendlySizeSteppedPolicy.probability(matchSize: 31, sizeCombo: 1))
         XCTAssertNil(FriendlySizeSteppedPolicy.probability(matchSize: 3, sizeCombo: 0))
         XCTAssertEqual((1...10).map { ThreeOrbSteppedFriendlyPolicy.probability(startingCombo: $0) },
-                       [0.50,0.65,0.65,0.65,0.75,0.75,0.75,0.85,0.85,0.85])
+                       [0.50,0.55,0.55,0.55,0.65,0.65,0.65,0.75,0.75,0.75])
     }
 
     func testThreeOrbFriendlyBoundariesUseStrictLessThanAndStopAtFirstGo() {
@@ -848,7 +848,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(targets, [5,4,1])
         XCTAssertEqual(decision.mode, .multiSizeStepped)
         XCTAssertEqual(decision.bucketDecisions.map(\.matchSize), [3,5])
-        XCTAssertEqual(decision.bucketDecisions.map(\.probability), [0.75,0.50])
+        XCTAssertEqual(decision.bucketDecisions.map(\.probability), [0.65,0.50])
         XCTAssertEqual(decision.bucketDecisions.map(\.attemptedTargets), [[5,4],[1]])
         XCTAssertEqual(decision.bucketDecisions.map(\.selectedTarget), [4,1])
         XCTAssertEqual(decision.requestedSizes, [3,3,3,3,5])
@@ -887,7 +887,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     func testFriendlyV3EachBucketKeepsItsStartingProbabilityWhileDescending() {
         let cases: [(Int, Int, Double)] = [
-            (3, 9, 0.85), (4, 7, 0.75), (5, 4, 0.75), (6, 3, 0.65),
+            (3, 9, 0.75), (4, 7, 0.75), (5, 4, 0.75), (6, 3, 0.65),
             (7, 4, 0.75), (8, 3, 0.75), (9, 2, 0.65), (10, 2, 0.75),
             (15, 2, 0.75), (30, 1, 0.75)
         ]
@@ -1069,10 +1069,10 @@ final class OrbPuzzleEngineTests: XCTestCase {
 
     func testThreeOrbCascadeRecomputesModeProbabilityAndTargetFromActualWave() {
         let waves: [([Int], [Double], Int, Double)] = [
-            (Array(repeating: 3, count: 6), [0.10], 6, 0.75),
-            (Array(repeating: 3, count: 6), [0.90, 0.10], 5, 0.75),
-            (Array(repeating: 3, count: 5), [0.90, 0.10], 4, 0.75),
-            (Array(repeating: 3, count: 4), [0.90, 0.10], 3, 0.65),
+            (Array(repeating: 3, count: 6), [0.10], 6, 0.65),
+            (Array(repeating: 3, count: 6), [0.90, 0.10], 5, 0.65),
+            (Array(repeating: 3, count: 5), [0.90, 0.10], 4, 0.65),
+            (Array(repeating: 3, count: 4), [0.90, 0.10], 3, 0.55),
             ([3], [0.49], 1, 0.50)
         ]
         for (sizes, values, expectedTarget, expectedProbability) in waves {
@@ -1085,7 +1085,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertEqual(decision.probabilityTarget, expectedTarget)
         }
 
-        var mixedValues = [0.64,0.49].makeIterator()
+        var mixedValues = [0.49,0.49].makeIterator()
         let mixed = FriendlyNaturalSkyfallPolicy.selectTarget(previousSizes: [3,4],
             removedOrbCount: 7, emptySlotCount: 7, roll: { _ in mixedValues.next()! })
         XCTAssertEqual(mixed.mode, .multiSizeStepped)

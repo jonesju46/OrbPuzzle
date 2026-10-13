@@ -85,9 +85,9 @@ enum FriendlySizeSteppedPolicy {
         case 3:
             switch sizeCombo {
             case 1: return 0.50
-            case 2...4: return 0.65
-            case 5...7: return 0.75
-            case 8...10: return 0.85
+            case 2...4: return 0.55
+            case 5...7: return 0.65
+            case 8...10: return 0.75
             default: return nil
             }
         case 4:
