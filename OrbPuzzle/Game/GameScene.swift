@@ -660,6 +660,12 @@ final class GameScene: SKScene {
                   current.isAdjacent(to: destination),
                   let displacedOrb = grid.orb(at: destination),
                   grid.swap(current, destination) else { continue }
+            if GlassSwapSoundPolicy.shouldRequestPlayback(
+                didSwap: true,
+                isDragActive: gameState == .selected || gameState == .dragging
+            ) {
+                GameAudioManager.shared.playGlassSwapSound()
+            }
             if !turnController.isTiming {
                 resetComboDisplay()
                 turnController.beginTiming(at: lastUpdateTime)

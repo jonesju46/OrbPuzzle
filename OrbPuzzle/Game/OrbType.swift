@@ -31,6 +31,18 @@ enum OrbType: String, CaseIterable, Codable, Sendable {
         case .heart: return "心"
         }
     }
+
+    /// Single rendering source for the six finalized Hebrew orb symbols.
+    var hebrewLabel: String {
+        switch self {
+        case .water: return "מ"
+        case .fire: return "א"
+        case .wood: return "ע"
+        case .light: return "ו"
+        case .dark: return "ח"
+        case .heart: return "ל"
+        }
+    }
 }
 
 struct Orb: Identifiable, Equatable, Sendable {

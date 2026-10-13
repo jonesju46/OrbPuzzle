@@ -23,3 +23,24 @@ for index,(note,freq) in enumerate(NOTES.items()):
     with wave.open(str(ROOT/f"combo_{note}.wav"),"wb") as out:
         out.setnchannels(1);out.setsampwidth(2);out.setframerate(44100);out.writeframes(pcm)
     print(f"combo_{note}.wav: PCM16 mono 44100 Hz, 300 ms")
+
+# Original glass-marble swap transient. This is synthesized from damped
+# resonances and deterministic noise; it contains no third-party sample.
+rng=random.Random(20261013)
+samples=[]
+for i in range(5292):
+    t=i/44100
+    attack=1-math.exp(-t/0.0007)
+    resonances=(
+        .58*math.sin(2*math.pi*1280*t)*math.exp(-t*34),
+        .31*math.sin(2*math.pi*2130*t+.4)*math.exp(-t*47),
+        .18*math.sin(2*math.pi*3370*t+1.1)*math.exp(-t*62),
+    )
+    transient=.08*rng.uniform(-1,1)*math.exp(-t/.004)
+    tail=min(1,max(0,(.120-t)/.018))
+    samples.append((sum(resonances)+transient)*attack*tail*tail)
+peak=max(abs(v) for v in samples)
+pcm=b"".join(struct.pack("<h",round(v/peak*.42*32767)) for v in samples)
+with wave.open(str(ROOT/"orb_glass_swap.wav"),"wb") as out:
+    out.setnchannels(1);out.setsampwidth(2);out.setframerate(44100);out.writeframes(pcm)
+print("orb_glass_swap.wav: PCM16 mono 44100 Hz, 120 ms")
