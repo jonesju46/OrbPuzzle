@@ -1198,10 +1198,15 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertTrue(preparation.usesFriendlyTypes, "size=\(size)")
             XCTAssertEqual(preparation.decision.selectedTarget, 1)
             XCTAssertEqual(preparation.plan?.forcedGroups.first?.count, size)
+            XCTAssertEqual(preparation.plan?.templatePlacements.first?.template.orbType, .heart)
+            XCTAssertEqual(preparation.plan?.templatePlacements.first?.template.normalizedOffsets,
+                FriendlyGroupTemplate(sourceIndex: 0, match: previous.matches[0]).normalizedOffsets)
             XCTAssertEqual(preparation.refill(in: grid).count, size)
             let matches = FriendlyRefillPipeline.scan(in: grid).matches
             XCTAssertTrue(matches.contains {
-                $0.matchSize == size && $0.positions.isSubset(of: Set(preparation.slots))
+                $0.matchSize == size && $0.type == .heart
+                    && $0.positions.isSubset(of: Set(preparation.slots))
+                    && FriendlyGroupTemplate(sourceIndex: 0, match: previous.matches[0]).matches($0)
             }, "size=\(size)")
             XCTAssertEqual(allOrbIDs(in: grid).count, 30)
             XCTAssertTrue(grid.emptyPositions().isEmpty)
@@ -1528,6 +1533,153 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 }
             }
         }
+    }
+
+    func testFriendlyV4TemplateNormalizationPreservesTranslationButNotRotationMirrorOrColor() {
+        let original: Set<GridPosition> = [
+            GridPosition(row: 1, column: 1), GridPosition(row: 2, column: 1),
+            GridPosition(row: 3, column: 1), GridPosition(row: 3, column: 2),
+            GridPosition(row: 3, column: 3)
+        ]
+        let template = FriendlyGroupTemplate(sourceIndex: 7, orbType: .water, positions: original)
+        let translated: Set<GridPosition> = [
+            GridPosition(row: 0, column: 2), GridPosition(row: 1, column: 2),
+            GridPosition(row: 2, column: 2), GridPosition(row: 2, column: 3),
+            GridPosition(row: 2, column: 4)
+        ]
+        let rotated: Set<GridPosition> = [
+            GridPosition(row: 0, column: 0), GridPosition(row: 0, column: 1),
+            GridPosition(row: 0, column: 2), GridPosition(row: 1, column: 0),
+            GridPosition(row: 2, column: 0)
+        ]
+        let mirrored: Set<GridPosition> = [
+            GridPosition(row: 0, column: 2), GridPosition(row: 1, column: 2),
+            GridPosition(row: 2, column: 0), GridPosition(row: 2, column: 1),
+            GridPosition(row: 2, column: 2)
+        ]
+        XCTAssertTrue(template.matches(MatchResult(type: .water, positions: translated)))
+        XCTAssertFalse(template.matches(MatchResult(type: .fire, positions: translated)))
+        XCTAssertFalse(template.matches(MatchResult(type: .water, positions: rotated)))
+        XCTAssertFalse(template.matches(MatchResult(type: .water, positions: mirrored)))
+    }
+
+    func testFriendlyV4HorizontalAndVerticalTemplatesKeepSizesThreeThroughSix() {
+        for size in 3...6 {
+            let horizontal = FriendlyGroupTemplate(sourceIndex: size, orbType: .fire,
+                positions: Set((0..<size).map { GridPosition(row: 2, column: $0) }))
+            let vertical = FriendlyGroupTemplate(sourceIndex: size + 10, orbType: .wood,
+                positions: Set((0..<size).map { GridPosition(row: $0, column: 4) }))
+            XCTAssertEqual(horizontal.matchSize, size)
+            XCTAssertEqual(horizontal.normalizedOffsets.map(\.row), Array(repeating: 0, count: size))
+            XCTAssertEqual(vertical.matchSize, size)
+            XCTAssertEqual(vertical.normalizedOffsets.map(\.column), Array(repeating: 0, count: size))
+            XCTAssertNotEqual(horizontal.normalizedOffsets, vertical.normalizedOffsets)
+        }
+    }
+
+    func testFriendlyV4LTCrossTemplatesRemainDistinctExactShapes() {
+        let shapes: [Set<GridPosition>] = [
+            [GridPosition(row: 0, column: 0), GridPosition(row: 1, column: 0),
+             GridPosition(row: 2, column: 0), GridPosition(row: 2, column: 1),
+             GridPosition(row: 2, column: 2)],
+            [GridPosition(row: 0, column: 0), GridPosition(row: 0, column: 1),
+             GridPosition(row: 0, column: 2), GridPosition(row: 1, column: 1),
+             GridPosition(row: 2, column: 1)],
+            [GridPosition(row: 0, column: 1), GridPosition(row: 1, column: 0),
+             GridPosition(row: 1, column: 1), GridPosition(row: 1, column: 2),
+             GridPosition(row: 2, column: 1)]
+        ]
+        let templates = shapes.enumerated().map {
+            FriendlyGroupTemplate(sourceIndex: $0.offset, orbType: .light, positions: $0.element)
+        }
+        XCTAssertEqual(Set(templates.map(\.normalizedOffsets)).count, 3)
+        for (index, template) in templates.enumerated() {
+            XCTAssertTrue(template.matches(MatchResult(type: .light, positions: shapes[index])))
+            for other in shapes.indices where other != index {
+                XCTAssertFalse(template.matches(MatchResult(type: .light, positions: shapes[other])))
+            }
+        }
+    }
+
+    func testFriendlyV4TemplateFallbackEnumeratesAlternateSourceGroupsDeterministically() {
+        let templates = [
+            FriendlyGroupTemplate(sourceIndex: 0, orbType: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
+            FriendlyGroupTemplate(sourceIndex: 1, orbType: .fire,
+                positions: Set((0..<3).map { GridPosition(row: $0, column: 0) })),
+            FriendlyGroupTemplate(sourceIndex: 2, orbType: .wood,
+                positions: Set((0..<5).map { GridPosition(row: 1, column: $0) }))
+        ]
+        let decisions = [
+            FriendlySizeBucketDecision(matchSize: 3, startingCombo: 2, probability: 0.55,
+                rolls: [], selectedTarget: 1),
+            FriendlySizeBucketDecision(matchSize: 5, startingCombo: 1, probability: 0.50,
+                rolls: [], selectedTarget: 1)
+        ]
+        let attempts = FriendlyNaturalSkyfallPolicy.templateSubsets(
+            from: templates, bucketDecisions: decisions)
+        XCTAssertEqual(attempts.first?.map(\.matchSize), [3,5])
+        XCTAssertTrue(attempts.contains { Set($0.map(\.sourceIndex)) == Set([0,2]) })
+        XCTAssertTrue(attempts.contains { Set($0.map(\.sourceIndex)) == Set([1,2]) })
+        XCTAssertLessThan(attempts.firstIndex { $0.count == 1 && $0[0].matchSize == 3 }!,
+                          attempts.firstIndex { $0.count == 1 && $0[0].matchSize == 5 }!)
+    }
+
+    func testFriendlyV4SinglePlannerCopiesMixedColorAndShapeTemplates() {
+        let grid = OrbGrid()
+        let templates = [
+            FriendlyGroupTemplate(sourceIndex: 0, orbType: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
+            FriendlyGroupTemplate(sourceIndex: 1, orbType: .fire, positions: [
+                GridPosition(row: 0, column: 0), GridPosition(row: 1, column: 0),
+                GridPosition(row: 2, column: 0), GridPosition(row: 0, column: 1),
+                GridPosition(row: 0, column: 2)
+            ])
+        ]
+        var generator = SeededGenerator(seed: 94_001)
+        let controller = SkyfallController()
+        guard let plan = controller.makeFriendlyNaturalRefill(
+            grid: grid, refillSlots: grid.emptyPositions(), templateAttempts: [templates],
+            using: &generator
+        ) else { XCTFail("Missing exact-template plan"); return }
+        XCTAssertEqual(controller.lastFriendlySubsetAttempts, 1)
+        XCTAssertEqual(plan.templatePlacements.count, 2)
+        XCTAssertEqual(plan.templatePlacements.map { $0.template.orbType }.sorted { $0.rawValue < $1.rawValue },
+                       [.fire, .water])
+        let slots = grid.emptyPositions()
+        XCTAssertEqual(grid.refill(types: plan.types, at: slots).count, 30)
+        let direct = FriendlyRefillPipeline.directMatches(MatchDetector().detect(in: grid),
+                                                          plan: plan, slots: slots)
+        XCTAssertEqual(direct.count, 2)
+        for placement in plan.templatePlacements {
+            XCTAssertTrue(direct.contains { placement.matches($0) })
+        }
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
+    }
+
+    func testFriendlyV4PipelineUsesFrozenNormalizedTemplatesAndOneRefill() {
+        let previous = ResolveResult(matches: [
+            MatchResult(type: .water,
+                positions: Set((0..<3).map { GridPosition(row: 0, column: $0) })),
+            MatchResult(type: .fire, positions: [
+                GridPosition(row: 0, column: 3), GridPosition(row: 1, column: 3),
+                GridPosition(row: 2, column: 3), GridPosition(row: 0, column: 4),
+                GridPosition(row: 0, column: 5)
+            ])
+        ])
+        let grid = OrbGrid()
+        var generator = SeededGenerator(seed: 94_002)
+        let controller = SkyfallController()
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: previous, controller: controller,
+            using: &generator, roll: { _ in 0.10 })
+        XCTAssertTrue(preparation.usesFriendlyTypes)
+        XCTAssertEqual(preparation.plan?.templatePlacements.count, 2)
+        XCTAssertEqual(Set(preparation.plan?.templatePlacements.map { $0.template.orbType } ?? []),
+                       Set([.water, .fire]))
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
+        XCTAssertEqual(grid.cells.flatMap { $0 }.compactMap { $0 }.count, 30)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
     }
 
     func testControlledSkyfallNeverUsesFriendlySizePolicy() {
