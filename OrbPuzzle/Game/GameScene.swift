@@ -919,17 +919,79 @@ final class GameScene: SKScene {
             }
         }
 
-        // ON uses its unchanged exact-total planner. OFF derives this refill's
-        // candidate count from the previous snapshot's actual resolved groups.
+        // OFF-mode V4 planning can exceed a frame budget for a 30-slot refill.
+        // Work only on an immutable type snapshot off the SpriteKit thread;
+        // the live model and all nodes remain main-thread confined.
+        if !skyfallController.hasControlledTarget {
+            prepareFriendlyRefillAsync(refillSlots: refillSlots,
+                expectedRefillCount: expectedRefillCount,
+                previousResolution: previousResolution, resolveID: resolveID)
+            return
+        }
+
+        // ON keeps its unchanged exact-total planner on the existing path.
         let controlledTypes = skyfallController.hasControlledTarget
             && skyfallController.needsAnotherCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
             : nil
+        commitRefillAndContinue(refillSlots: refillSlots,
+            expectedRefillCount: expectedRefillCount, resolveID: resolveID,
+            controlledTypes: controlledTypes, friendlyPreparation: nil)
+    }
+
+    private func prepareFriendlyRefillAsync(
+        refillSlots: [GridPosition], expectedRefillCount: Int,
+        previousResolution: ResolveResult, resolveID: UInt
+    ) {
+        let sessionID = gameSessionFence.id
+        let typeSnapshot = grid.typeSnapshot
+        let started = ProcessInfo.processInfo.systemUptime
+#if DEBUG
+        print("[PLANNER_TIME] scheduled mainThread=\(Thread.isMainThread) slots=\(refillSlots.count)")
+#endif
+        DispatchQueue.global(qos: .userInitiated).async {
+            let plannerRanOnMainThread = Thread.isMainThread
+            let planningGrid = OrbGrid(typeSnapshot: typeSnapshot)
+            let planningController = SkyfallController()
+            planningController.reset(requestedCombos: 0)
+            let preparation = FriendlyRefillPipeline.prepare(
+                grid: planningGrid, previousResolution: previousResolution,
+                controller: planningController)
+            let totalMs = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard self.gameSessionFence.accepts(sessionID),
+                      resolveID == self.activeResolveID,
+                      self.resolveLifecycle.acceptsSkyfallCompletion,
+                      self.gameState == .refilling,
+                      self.grid.typeSnapshot == typeSnapshot,
+                      self.grid.emptyPositions() == refillSlots else {
+                    self.logStaleCompletion("friendly planner")
+                    return
+                }
+#if DEBUG
+                let timing = preparation.plannerTiming
+                print("[PLANNER_TIME] analyzerMs=\(String(format: "%.2f", timing.analyzerMs)) candidateMs=\(String(format: "%.2f", timing.candidateMs)) searchMs=\(String(format: "%.2f", timing.searchMs)) validationMs=\(String(format: "%.2f", timing.validationMs)) totalMs=\(String(format: "%.2f", totalMs)) mainThread=\(plannerRanOnMainThread)")
+#endif
+                self.commitRefillAndContinue(refillSlots: refillSlots,
+                    expectedRefillCount: expectedRefillCount, resolveID: resolveID,
+                    controlledTypes: nil, friendlyPreparation: preparation)
+            }
+        }
+    }
+
+    private func commitRefillAndContinue(
+        refillSlots: [GridPosition], expectedRefillCount: Int, resolveID: UInt,
+        controlledTypes: [OrbType]?, friendlyPreparation: FriendlyRefillPreparation?
+    ) {
+        guard resolveID == activeResolveID,
+              resolveLifecycle.acceptsSkyfallCompletion,
+              gameState == .refilling,
+              refillSlots == grid.emptyPositions() else {
+            logStaleCompletion("refill commit")
+            return
+        }
         let isControlledSkyfallRefill = controlledTypes != nil
-        let friendlyPreparation = skyfallController.hasControlledTarget ? nil
-            : FriendlyRefillPipeline.prepare(
-                grid: grid, previousResolution: previousResolution, controller: skyfallController
-            )
         let friendlyDecision = friendlyPreparation?.decision
         let isFriendlyNaturalRefill = friendlyPreparation?.usesFriendlyTypes == true
         let isSafeRefill = !isControlledSkyfallRefill && !isFriendlyNaturalRefill
@@ -1002,7 +1064,15 @@ final class GameScene: SKScene {
             pointForPosition: { [weak self] position in
                 self?.point(for: position) ?? .zero
             },
-            friendlyPreparation: friendlyPreparation
+            friendlyPreparation: friendlyPreparation,
+            completion: { [weak self] completed in
+                self?.refillAnimationDidComplete(result: completed, resolveID: resolveID,
+                    friendlyPreparation: friendlyPreparation,
+                    friendlyDecision: friendlyDecision,
+                    isControlledSkyfallRefill: isControlledSkyfallRefill,
+                    isFriendlyNaturalRefill: isFriendlyNaturalRefill,
+                    isSafeRefill: isSafeRefill)
+            }
         )
 #if DEBUG
         if result.spawns.count != expectedRefillCount {
@@ -1022,99 +1092,113 @@ final class GameScene: SKScene {
             print("[REFILL][ERROR] assignmentCount mismatch emptyBefore=\(refillSlots.count) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
         }
         print("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
+        let starts = result.descriptors.map(\.start.y)
+        let ends = result.descriptors.map(\.end.y)
+        print("[REFILL_ANIMATION] newNodes=\(result.nodes.count) start=\(starts.min() ?? 0)...\(starts.max() ?? 0) end=\(ends.min() ?? 0)...\(ends.max() ?? 0) durationMs=\(result.duration * 1_000) actionsScheduled=\(result.nodes.allSatisfy { $0.action(forKey: RefillController.fallActionKey) != nil })")
 #endif
-        run(after: result.duration) { [weak self] in
-            guard let self else { return }
-            guard resolveID == self.activeResolveID,
-                  self.gameState == .refilling else {
-                self.logStaleCompletion("refill animation")
-                return
-            }
-            let stableBoard = friendlyPreparation != nil
-                ? FriendlyRefillPipeline.scan(in: self.grid)
-                : StableBoardScan(matches: self.matchDetector.detect(in: self.grid))
-            let matches = stableBoard.matches
-#if DEBUG
-            print("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
-            if friendlyPreparation != nil {
-                self.friendlyDebugDetectedGroups = matches.count
-                if let preparation = friendlyPreparation {
-                    self.friendlyDebugStatistics[preparation.slots.count, default: FriendlyRefillDebugStatistics()]
-                        .recordPostRefill(matches, preparation: preparation)
-                    if preparation.decision.selectedTarget > 0 {
-                        let target = preparation.decision.selectedTarget
-                        self.friendlyTargetStatistics[target, default: FriendlyTargetDebugStatistics()]
-                            .recordPostRefill(matches, preparation: preparation)
-                        let targetStats = self.friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
-                        print("[FRIENDLY_TARGET_STATS] selected=\(target) attempts=\(targetStats.attempts) plannedExact=\(targetStats.plannedExact) detectedExactOrMore=\(targetStats.detectedExactOrMore)")
-                    }
-                    let stats = self.friendlyDebugStatistics[preparation.slots.count] ?? FriendlyRefillDebugStatistics()
-                    print("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
-                }
-            }
-#endif
+    }
 
-            if isControlledSkyfallRefill || isFriendlyNaturalRefill {
-                guard self.resolveLifecycle.acceptsSkyfallCompletion else {
-                    self.logStaleCompletion("skyfall cycle")
-                    return
-                }
-                self.gameState = .skyfall
-            }
-
-            // Initial/manual matches are processed before the first refill and
-            // never enter this counter. Every post-refill full-board detection,
-            // controlled or natural, contributes its actual normalized groups.
-            if self.skyfallController.recordDetectedGroups(matches.count) {
-#if DEBUG
-                let source = isControlledSkyfallRefill
-                    ? "controlled"
-                    : (isFriendlyNaturalRefill ? "friendly-natural" : "natural")
-                print("[SKYFALL] \(source) groups=\(matches.count) total=\(self.skyfallController.generatedCombos) target=\(self.skyfallController.requestedCombos)")
-#endif
-            }
-#if DEBUG
-            if friendlyDecision != nil {
-                print("[FRIENDLY_REFILL] actualDetected=\(matches.count)")
-            }
-            if isSafeRefill {
-                print("[NATURAL] detected groups=\(matches.count) cumulative=\(self.skyfallController.generatedCombos)")
-            }
-#endif
-
-            // Every refill path ends at the same stable-board full-grid scan.
-            // Never finish while MatchDetector still reports a 3+ group.
-            if !stableBoard.canFinishResolve {
-                self.process(matches: matches, source: .skyfall, resolveID: resolveID)
-                return
-            }
-
-            if isControlledSkyfallRefill || isFriendlyNaturalRefill {
-#if DEBUG
-                print("[SKYFALL-BUG] match-producing refill produced no match")
-#endif
-                self.finishResolution(resolveID: resolveID)
-                return
-            }
-
-            guard !self.skyfallController.hasControlledTarget
-                    || !self.skyfallController.needsAnotherCycle else {
-#if DEBUG
-                print("[MATCH-BUG] controlled target stalled before full-board scan")
-#endif
-                self.finishResolution(resolveID: resolveID)
-                return
-            }
-            guard self.resolveLifecycle.beginFinalization() else {
-                self.logStaleCompletion("duplicate finalization")
-                return
-            }
-#if DEBUG
-            print("[SKYFALL] entering finalization")
-            print("[REFILL] final complete new=\(result.spawns.count)")
-#endif
-            self.finishResolution(resolveID: resolveID)
+    private func refillAnimationDidComplete(
+        result: RefillAnimationResult, resolveID: UInt,
+        friendlyPreparation: FriendlyRefillPreparation?,
+        friendlyDecision: FriendlyRefillDecision?,
+        isControlledSkyfallRefill: Bool,
+        isFriendlyNaturalRefill: Bool,
+        isSafeRefill: Bool
+    ) {
+        guard resolveID == activeResolveID,
+              resolveLifecycle.acceptsSkyfallCompletion,
+              gameState == .refilling else {
+            logStaleCompletion("refill animation")
+            return
         }
+#if DEBUG
+        print("[CASCADE] refillAnimationComplete=true beforeNextResolve=true resolveID=\(resolveID)")
+#endif
+        let stableBoard = friendlyPreparation != nil
+            ? FriendlyRefillPipeline.scan(in: grid)
+            : StableBoardScan(matches: matchDetector.detect(in: grid))
+        let matches = stableBoard.matches
+#if DEBUG
+        print("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
+        if friendlyPreparation != nil {
+            friendlyDebugDetectedGroups = matches.count
+            if let preparation = friendlyPreparation {
+                friendlyDebugStatistics[preparation.slots.count, default: FriendlyRefillDebugStatistics()]
+                    .recordPostRefill(matches, preparation: preparation)
+                if preparation.decision.selectedTarget > 0 {
+                    let target = preparation.decision.selectedTarget
+                    friendlyTargetStatistics[target, default: FriendlyTargetDebugStatistics()]
+                        .recordPostRefill(matches, preparation: preparation)
+                    let targetStats = friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
+                    print("[FRIENDLY_TARGET_STATS] selected=\(target) attempts=\(targetStats.attempts) plannedExact=\(targetStats.plannedExact) detectedExactOrMore=\(targetStats.detectedExactOrMore)")
+                }
+                let stats = friendlyDebugStatistics[preparation.slots.count] ?? FriendlyRefillDebugStatistics()
+                print("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
+            }
+        }
+#endif
+
+        if isControlledSkyfallRefill || isFriendlyNaturalRefill {
+            guard resolveLifecycle.acceptsSkyfallCompletion else {
+                logStaleCompletion("skyfall cycle")
+                return
+            }
+            gameState = .skyfall
+        }
+
+        // Initial/manual matches are processed before the first refill and
+        // never enter this counter. Every post-refill full-board detection,
+        // controlled or natural, contributes its actual normalized groups.
+        if skyfallController.recordDetectedGroups(matches.count) {
+#if DEBUG
+            let source = isControlledSkyfallRefill
+                ? "controlled"
+                : (isFriendlyNaturalRefill ? "friendly-natural" : "natural")
+            print("[SKYFALL] \(source) groups=\(matches.count) total=\(skyfallController.generatedCombos) target=\(skyfallController.requestedCombos)")
+#endif
+        }
+#if DEBUG
+        if friendlyDecision != nil {
+            print("[FRIENDLY_REFILL] actualDetected=\(matches.count)")
+        }
+        if isSafeRefill {
+            print("[NATURAL] detected groups=\(matches.count) cumulative=\(skyfallController.generatedCombos)")
+        }
+#endif
+
+        // Every refill path ends at the same stable-board full-grid scan.
+        // Never finish while MatchDetector still reports a 3+ group.
+        if !stableBoard.canFinishResolve {
+            process(matches: matches, source: .skyfall, resolveID: resolveID)
+            return
+        }
+
+        if isControlledSkyfallRefill || isFriendlyNaturalRefill {
+#if DEBUG
+            print("[SKYFALL-BUG] match-producing refill produced no match")
+#endif
+            finishResolution(resolveID: resolveID)
+            return
+        }
+
+        guard !skyfallController.hasControlledTarget
+                || !skyfallController.needsAnotherCycle else {
+#if DEBUG
+            print("[MATCH-BUG] controlled target stalled before full-board scan")
+#endif
+            finishResolution(resolveID: resolveID)
+            return
+        }
+        guard resolveLifecycle.beginFinalization() else {
+            logStaleCompletion("duplicate finalization")
+            return
+        }
+#if DEBUG
+        print("[SKYFALL] entering finalization")
+        print("[REFILL] final complete new=\(result.spawns.count)")
+#endif
+        finishResolution(resolveID: resolveID)
     }
 
     private func finishResolution(resolveID: UInt) {

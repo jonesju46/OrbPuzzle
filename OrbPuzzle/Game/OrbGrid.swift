@@ -37,6 +37,23 @@ final class OrbGrid {
         }
     }
 
+    /// Immutable type-only board copy used by background planning. New Orb IDs
+    /// belong only to this isolated working grid and never enter the live scene.
+    convenience init(typeSnapshot: [[OrbType?]]) {
+        precondition(!typeSnapshot.isEmpty && !(typeSnapshot.first?.isEmpty ?? true))
+        precondition(typeSnapshot.allSatisfy { $0.count == typeSnapshot[0].count })
+        self.init(rows: typeSnapshot.count, columns: typeSnapshot[0].count)
+        for row in 0..<rows {
+            for column in 0..<columns {
+                cells[row][column] = typeSnapshot[row][column].map { Orb(type: $0) }
+            }
+        }
+    }
+
+    var typeSnapshot: [[OrbType?]] {
+        cells.map { $0.map { $0?.type } }
+    }
+
     func contains(_ position: GridPosition) -> Bool {
         (0..<rows).contains(position.row) && (0..<columns).contains(position.column)
     }

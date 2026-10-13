@@ -1682,6 +1682,75 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(grid.emptyPositions().isEmpty)
     }
 
+    func testRefillAnimationStartsAboveBoardAndSchedulesEveryNewNode() {
+        for refillCount in [3, 9, 15, 21, 27, 30] {
+            let grid = OrbGrid(types: matchTestBoardTypes())
+            let positions = Set((0..<refillCount).map {
+                GridPosition(row: $0 / OrbGrid.defaultColumns,
+                             column: $0 % OrbGrid.defaultColumns)
+            })
+            _ = grid.remove(positions)
+            let slots = grid.emptyPositions()
+            let boardNode = SKNode()
+            var completionCount = 0
+            let result = RefillController().refillEmptySlots(
+                grid: grid, slots: slots,
+                types: Array(repeating: .water, count: slots.count),
+                boardNode: boardNode, cellSize: CGSize(width: 50, height: 50),
+                pointForPosition: {
+                    CGPoint(x: CGFloat($0.column) * 50, y: CGFloat($0.row) * 50)
+                }, completion: { _ in completionCount += 1 })
+
+            XCTAssertEqual(result.spawns.count, refillCount)
+            XCTAssertEqual(result.nodes.count, refillCount)
+            XCTAssertEqual(result.descriptors.count, refillCount)
+            XCTAssertEqual(completionCount, 0, "Completion must wait for SKAction")
+            XCTAssertTrue(zip(result.nodes, result.descriptors).allSatisfy { node, descriptor in
+                node.position == descriptor.start
+                    && descriptor.start.y > descriptor.end.y
+                    && node.action(forKey: RefillController.fallActionKey) != nil
+            })
+            XCTAssertEqual(boardNode.children.count, refillCount)
+            XCTAssertTrue(grid.emptyPositions().isEmpty)
+            XCTAssertEqual(grid.cells.flatMap { $0 }.compactMap { $0 }.count, 30)
+        }
+    }
+
+    func testPlannerTypeSnapshotIsIsolatedFromLiveGrid() {
+        let live = OrbGrid(types: matchTestBoardTypes())
+        _ = live.remove([GridPosition(row: 4, column: 0), GridPosition(row: 4, column: 1),
+                         GridPosition(row: 4, column: 2)])
+        let snapshot = live.typeSnapshot
+        let planning = OrbGrid(typeSnapshot: snapshot)
+        XCTAssertEqual(planning.typeSnapshot, snapshot)
+        _ = planning.refill(types: [.heart, .heart, .heart], at: planning.emptyPositions())
+        XCTAssertEqual(live.typeSnapshot, snapshot)
+        XCTAssertEqual(live.emptyPositions().count, 3)
+        XCTAssertTrue(planning.emptyPositions().isEmpty)
+    }
+
+    func testTenComboThirtySlotFriendlyPlannerReportsStageTimings() {
+        let previous = ResolveResult(matches: (0..<10).map { index in
+            MatchResult(type: OrbType.allCases[index % OrbType.allCases.count],
+                positions: Set((0..<3).map {
+                    GridPosition(row: index / 2, column: (index % 2) * 3 + $0)
+                }))
+        })
+        let grid = OrbGrid()
+        var generator = SeededGenerator(seed: 95_001)
+        let preparation = FriendlyRefillPipeline.prepare(
+            grid: grid, previousResolution: previous, controller: SkyfallController(),
+            using: &generator, roll: { _ in 0 })
+        XCTAssertTrue(preparation.planCalled)
+        XCTAssertEqual(preparation.types.count, 30)
+        XCTAssertGreaterThanOrEqual(preparation.plannerTiming.analyzerMs, 0)
+        XCTAssertGreaterThanOrEqual(preparation.plannerTiming.candidateMs, 0)
+        XCTAssertGreaterThanOrEqual(preparation.plannerTiming.searchMs, 0)
+        XCTAssertGreaterThanOrEqual(preparation.plannerTiming.validationMs, 0)
+        XCTAssertEqual(preparation.refill(in: grid).count, 30)
+        XCTAssertTrue(grid.emptyPositions().isEmpty)
+    }
+
     func testControlledSkyfallNeverUsesFriendlySizePolicy() {
         let controller = SkyfallController()
         controller.reset(requestedCombos: 3)

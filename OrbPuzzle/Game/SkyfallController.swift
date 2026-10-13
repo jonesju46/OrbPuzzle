@@ -7,6 +7,15 @@ struct FriendlyRefillRoll: Equatable, Sendable {
     let succeeded: Bool
 }
 
+struct FriendlyPlannerTiming: Equatable, Sendable {
+    var analyzerMs = 0.0
+    var candidateMs = 0.0
+    var searchMs = 0.0
+    var validationMs = 0.0
+
+    static let zero = FriendlyPlannerTiming()
+}
+
 /// Immutable description of one normalized group from the just-completed
 /// resolve wave. Offsets are translation-normalized only: rotation, mirroring,
 /// color changes and size changes are intentionally not canonicalized.
@@ -635,6 +644,9 @@ final class SkyfallController {
     private(set) var lastFriendlySearchNodes = 0
     private(set) var lastFriendlySubsetAttempts = 0
     private(set) var lastFriendlySearchLimited = false
+    private(set) var lastFriendlyCandidateMs = 0.0
+    private(set) var lastFriendlySearchMs = 0.0
+    private(set) var lastFriendlyValidationMs = 0.0
 
     /// V4 planner entry point. All size buckets have already consumed their
     /// independent probability rolls; this single call searches the merged
@@ -650,6 +662,9 @@ final class SkyfallController {
         lastFriendlySearchNodes = 0
         lastFriendlySubsetAttempts = 0
         lastFriendlySearchLimited = false
+        lastFriendlyCandidateMs = 0
+        lastFriendlySearchMs = 0
+        lastFriendlyValidationMs = 0
         guard !hasControlledTarget, refillSlots == grid.emptyPositions(),
               !templateAttempts.isEmpty else {
             lastFriendlyPlanningFailure = "assignment-failure"
@@ -659,10 +674,12 @@ final class SkyfallController {
         let allTemplates = templateAttempts.flatMap { $0 }.reduce(into: [Int: FriendlyGroupTemplate]()) {
             $0[$1.sourceIndex] = $1
         }.values
+        let candidateStart = ProcessInfo.processInfo.systemUptime
         let placementCache = Dictionary(uniqueKeysWithValues: allTemplates.map { template in
             (template.sourceIndex, FriendlyBoardAnalyzer.placements(
                 for: template, in: grid, refillSlots: refillSlots))
         })
+        lastFriendlyCandidateMs = (ProcessInfo.processInfo.systemUptime - candidateStart) * 1_000
         var failures: [String] = []
         let attemptLimit = max(1, subsetAttemptLimit)
         let waveLimit = max(1, waveNodeLimit)
@@ -692,6 +709,7 @@ final class SkyfallController {
             let perSearchLimit = min(max(1, searchNodeLimit), waveLimit - lastFriendlySearchNodes)
             var visited = 0
             var validations = 0
+            var validationSeconds = 0.0
             let validationLimit = 2_048
             var acceptedTypes: [OrbType]?
             var acceptedPlacements: [FriendlyTemplatePlacement] = []
@@ -705,6 +723,10 @@ final class SkyfallController {
                 guard visited <= perSearchLimit, validations < validationLimit else { return }
                 if index == ordered.count {
                     validations += 1
+                    let validationStart = ProcessInfo.processInfo.systemUptime
+                    defer {
+                        validationSeconds += ProcessInfo.processInfo.systemUptime - validationStart
+                    }
                     guard let types = planTypes(grid: grid, refillSlots: refillSlots,
                                                 forcedTypes: forced, using: &generator) else { return }
                     let matches = MatchDetector().detect(in: simulatedGrid(
@@ -730,7 +752,11 @@ final class SkyfallController {
                 }
             }
 
+            let searchStart = ProcessInfo.processInfo.systemUptime
             search(index: 0, occupied: [], forced: [:], placements: [], using: &generator)
+            let elapsed = ProcessInfo.processInfo.systemUptime - searchStart
+            lastFriendlyValidationMs += validationSeconds * 1_000
+            lastFriendlySearchMs += max(0, elapsed - validationSeconds) * 1_000
             lastFriendlySearchNodes += visited
             let limited = visited >= perSearchLimit || validations >= validationLimit
             lastFriendlySearchLimited = lastFriendlySearchLimited || limited
@@ -768,6 +794,9 @@ final class SkyfallController {
         lastFriendlySearchNodes = 0
         lastFriendlySubsetAttempts = 0
         lastFriendlySearchLimited = false
+        lastFriendlyCandidateMs = 0
+        lastFriendlySearchMs = 0
+        lastFriendlyValidationMs = 0
         guard !hasControlledTarget, refillSlots == grid.emptyPositions(), !requestedSizes.isEmpty,
               requestedSizes.count <= 10, requestedSizes.allSatisfy({ (3...30).contains($0) }) else {
             lastFriendlyPlanningFailure = "assignment-failure"; return nil
@@ -1167,7 +1196,7 @@ final class SkyfallController {
 /// The OFF-mode path actually used by GameScene after gravity. Keeping the
 /// decision, assignment and full-board scan together makes shape tests exercise
 /// the caller's path, including fallback, rather than the planner alone.
-struct FriendlyRefillPreparation {
+struct FriendlyRefillPreparation: Sendable {
     let slots: [GridPosition]
     let removedOrbCount: Int
     let decision: FriendlyRefillDecision
@@ -1178,6 +1207,7 @@ struct FriendlyRefillPreparation {
     let directGroupCount: Int
     let usesFriendlyTypes: Bool
     let fallbackReason: String?
+    var plannerTiming: FriendlyPlannerTiming = .zero
 
     var refillMode: String { usesFriendlyTypes ? "friendly" : "nonForced" }
 
@@ -1269,9 +1299,13 @@ enum FriendlyRefillPipeline {
         else { preconditionFailure("Friendly preparation called in ON mode") }
         let requested = decision.requestedSizes
         let called = decision.friendlyHit && !requested.isEmpty
+        let analyzerStart = ProcessInfo.processInfo.systemUptime
         let sourceTemplates = previousResolution.matches.enumerated().map {
             FriendlyGroupTemplate(sourceIndex: $0.offset, match: $0.element)
         }
+        let templateAttempts = called ? FriendlyNaturalSkyfallPolicy.templateSubsets(
+            from: sourceTemplates, bucketDecisions: decision.bucketDecisions) : []
+        let analyzerMs = (ProcessInfo.processInfo.systemUptime - analyzerStart) * 1_000
         var reasons: [String] = []
         var limited = false
         var attempts = 0
@@ -1292,8 +1326,6 @@ enum FriendlyRefillPipeline {
 #endif
         if called {
             if planProvider == nil {
-                let templateAttempts = FriendlyNaturalSkyfallPolicy.templateSubsets(
-                    from: sourceTemplates, bucketDecisions: decision.bucketDecisions)
                 let plan = controller.makeFriendlyNaturalRefill(
                     grid: grid, refillSlots: slots, templateAttempts: templateAttempts,
                     searchNodeLimit: searchNodeLimit, subsetAttemptLimit: subsetAttemptLimit,
@@ -1321,7 +1353,12 @@ enum FriendlyRefillPipeline {
                         return FriendlyRefillPreparation(slots: slots, removedOrbCount: previousResolution.removedOrbCount,
                             decision: decision, planCalled: true, plan: plan, types: plan.types,
                             validationDetectedGroups: matches.count, directGroupCount: direct.count,
-                            usesFriendlyTypes: true, fallbackReason: nil, searchLimited: limited)
+                            usesFriendlyTypes: true, fallbackReason: nil,
+                            plannerTiming: FriendlyPlannerTiming(analyzerMs: analyzerMs,
+                                candidateMs: controller.lastFriendlyCandidateMs,
+                                searchMs: controller.lastFriendlySearchMs,
+                                validationMs: controller.lastFriendlyValidationMs),
+                            searchLimited: limited)
                     }
                 }
                 reasons.append(controller.lastFriendlyPlanningFailure ?? "assignment-failure")
@@ -1370,7 +1407,12 @@ enum FriendlyRefillPipeline {
         return FriendlyRefillPreparation(slots: slots, removedOrbCount: previousResolution.removedOrbCount,
             decision: decision, planCalled: called, plan: nil, types: types,
             validationDetectedGroups: nil, directGroupCount: 0, usesFriendlyTypes: false,
-            fallbackReason: reason, searchLimited: limited)
+            fallbackReason: reason,
+            plannerTiming: FriendlyPlannerTiming(analyzerMs: analyzerMs,
+                candidateMs: controller.lastFriendlyCandidateMs,
+                searchMs: controller.lastFriendlySearchMs,
+                validationMs: controller.lastFriendlyValidationMs),
+            searchLimited: limited)
     }
 
     static func scan(in grid: OrbGrid) -> StableBoardScan {
