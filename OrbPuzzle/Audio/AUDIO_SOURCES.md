@@ -2,6 +2,38 @@
 
 Access and license verification date: **2026-10-14**
 
+## Combo soap-bubble Foley
+
+| Field | Value |
+| --- | --- |
+| Asset | `combo_soap_bubble.wav` |
+| Original Title | Grilled bacon |
+| Creator | danieldouch (Freesound user) |
+| Original URL | https://freesound.org/people/danieldouch/sounds/163998/ |
+| Public Preview URL | https://cdn.freesound.org/previews/163/163998_1622836-hq.mp3 |
+| Source Preview SHA-256 | `610AD9D90C7DFA905972BA561B411025EE1CE472138710428C604450B055FD30` |
+| Final Asset SHA-256 | `B54F36068EB9C3D46EE0FAE488DD151F5C4EF97F9832C5F87A4639C206F129FB` |
+| License | CC0 1.0 Universal public-domain dedication |
+| License URL | https://creativecommons.org/publicdomain/zero/1.0/ |
+| Access Date | 2026-10-14 |
+| Recording Type | Real physical bubble-bath Foley. The creator says the source is a bubble bath recorded with the bubbles popping close to the recorder. |
+| Source Format | Public high-quality MP3 preview of the 64.768-second, 48 kHz stereo source. The original WAV download was not accessed because Freesound requires login. |
+| Processing | Selected one isolated physical pop at 48.295 seconds; trimmed to 0.300 seconds; high-pass filtered at 80 Hz; applied a 3 ms fade-in and 60 ms fade-out; normalized to -20 LUFS with a -6 dB true-peak ceiling; converted to mono PCM signed 16-bit WAV at 44.1 kHz. No speed/pitch change, synthesis, or AI layer. |
+| Redistribution | **Confirmed for this public repository.** The source page applies CC0, which permits copying, modification, commercial use, and redistribution. |
+| Verification | **Confirmed recording and license.** The Freesound page identifies the physical bubble-bath recording method and CC0 license. iPhone listening remains unverified on Windows. |
+
+### Rejected requested Mixkit candidate
+
+The requested Mixkit item, **Soap bubble sound**, appears on
+https://mixkit.co/free-sound-effects/pop/. It was not included because the page
+does not identify a creator or recording method, so real-recording authenticity
+is unverified. More importantly, the Mixkit Sound Effects Free License permits
+use in a video-game end product but says the item cannot be redistributed with
+source files. `jonesju46/OrbPuzzle` is a public GitHub repository and bundles
+raw WAV resources in its source tree, so committing that item would violate the
+stated source-file restriction. The CC0 recording above is the legally
+redistributable replacement.
+
 ## Real acoustic piano
 
 | Field | Value |
@@ -63,6 +95,6 @@ Every output note is a direct recording of that exact pitch from the same piano,
 ## Licensing notes
 
 - CC0 permits commercial use, editing, app bundling, and repository redistribution without attribution.
-- Attribution is not legally required for either source, but this manifest keeps full credit and traceability.
-- No Freesound file was downloaded because the matching source required login. No CAPTCHA, login restriction, or download barrier was bypassed.
+- Attribution is not legally required for these sources, but this manifest keeps full credit and traceability.
+- Freesound originals that required login were not downloaded. Public playback previews were used where documented; no CAPTCHA, login restriction, or download barrier was bypassed.
 - No Pixabay, Sample Focus, commercial-game extraction, MIDI render, or generated audio is included.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sys
@@ -15,6 +16,10 @@ NOTES = [
     "C4", "D4", "E4", "F4", "G4", "A4", "B4",
     "C5", "D5", "E5", "F5", "G5", "A5", "B5",
 ]
+
+EXPECTED_SHA256 = {
+    "combo_soap_bubble.wav": "b54f36068eb9c3d46ee0fae488dd151f5c4ef97f9832c5f87a4639c206f129fb",
+}
 
 
 def inspect(path: Path) -> dict[str, int | float | str]:
@@ -47,10 +52,16 @@ def inspect(path: Path) -> dict[str, int | float | str]:
         )
 
     duration = frame_count / sample_rate
-    if path.name.startswith("combo_") and abs(duration - 1.8) > 0.01:
+    if path.name == "combo_soap_bubble.wav" and not 0.15 <= duration <= 0.35:
+        raise AssertionError(f"Unexpected soap-bubble duration: {path} ({duration})")
+    if path.name.startswith("combo_") and path.name != "combo_soap_bubble.wav" and abs(duration - 1.8) > 0.01:
         raise AssertionError(f"Unexpected piano duration: {path} ({duration})")
     if path.name == "orb_glass_swap.wav" and not 0.14 <= duration <= 0.175:
         raise AssertionError(f"Unexpected glass duration: {path} ({duration})")
+    sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    expected_hash = EXPECTED_SHA256.get(path.name)
+    if expected_hash is not None and sha256 != expected_hash:
+        raise AssertionError(f"SHA-256 mismatch in {path}: {sha256}")
     return {
         "asset": path.name,
         "sampleRate": sample_rate,
@@ -64,6 +75,7 @@ def inspect(path: Path) -> dict[str, int | float | str]:
         "lastSample": samples[-1],
         "clippingSamples": clipping_samples,
         "bytes": path.stat().st_size,
+        "sha256": sha256,
     }
 
 
@@ -71,6 +83,7 @@ def main() -> int:
     root = Path(__file__).resolve().parents[1]
     audio_dir = root / "OrbPuzzle" / "Audio"
     expected = [audio_dir / f"combo_{note}.wav" for note in NOTES]
+    expected.append(audio_dir / "combo_soap_bubble.wav")
     expected.append(audio_dir / "orb_glass_swap.wav")
     missing = [str(path) for path in expected if not path.is_file()]
     if missing:

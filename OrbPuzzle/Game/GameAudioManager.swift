@@ -1,48 +1,33 @@
 import AVFoundation
 import Foundation
 
-struct ComboSoundPair: Equatable, Sendable {
-    let primary: String
-    let harmony: String
-}
-
-enum ComboSoundSequence {
-    /// The recorded resources remain bundled for provenance and future use,
-    /// but V5.2 intentionally plays one fixed acoustic harmony for every
-    /// resolved group.
-    static let assetNotes = [
+enum RecordedPianoAssets {
+    /// Retained verified recordings. V5.3 no longer loads them for Combo playback.
+    static let notes = [
         "C3", "D3", "E3", "F3", "G3", "A3", "B3",
         "C4", "D4", "E4", "F4", "G4", "A4", "B4",
         "C5", "D5", "E5", "F5", "G5", "A5", "B5"
     ]
-    static let fixedPair = ComboSoundPair(primary: "B5", harmony: "D5")
-    static let playbackNotes = [fixedPair.primary, fixedPair.harmony]
-    static let stepCount = 1
+}
+
+enum ComboSoundPolicy {
+    static let resourceName = "combo_soap_bubble"
     static let fileExtension = "wav"
 
-    static func soundIndex(for comboNumber: Int) -> Int? {
-        guard comboNumber > 0 else { return nil }
-        return 1
-    }
-
-    static func note(for comboNumber: Int) -> String? {
-        guard soundIndex(for: comboNumber) != nil else { return nil }
-        return fixedPair.primary
-    }
-
-    static func notePair(for comboNumber: Int) -> ComboSoundPair? {
-        guard soundIndex(for: comboNumber) != nil else { return nil }
-        return fixedPair
-    }
-
-    static func resourceNames(for comboNumber: Int) -> [String]? {
-        guard let pair = notePair(for: comboNumber) else { return nil }
-        return ["combo_\(pair.primary)", "combo_\(pair.harmony)"]
-    }
-
     static func resourceName(for comboNumber: Int) -> String? {
-        guard let note = note(for: comboNumber) else { return nil }
-        return "combo_\(note)"
+        guard comboNumber > 0 else { return nil }
+        return resourceName
+    }
+}
+
+enum ComboVoicePoolPolicy {
+    static let voiceLimit = 4
+
+    static func firstIdleVoiceIndex(
+        voiceCount: Int,
+        isPlaying: (Int) -> Bool
+    ) -> Int? {
+        (0..<max(0, min(voiceCount, voiceLimit))).first { !isPlaying($0) }
     }
 }
 
@@ -84,8 +69,9 @@ final class GamePerformanceProfiler {
 
     private var drag = Totals(), dragCount = 0
     private var remove = Totals(), removeCount = 0
-    private var audio = Totals(), audioCount = 0
-    private var audioVoiceStealCount = 0, audioDroppedRequestCount = 0
+    private var audioTriggerMsTotal = 0.0
+    private var audioRequestCount = 0, audioPlayedCount = 0, audioDroppedRequestCount = 0
+    private var audioPeakActiveVoices = 0, audioVoiceStealCount = 0
     private var gravity = Totals(), gravityCount = 0
     private var friendly = Totals(), friendlyCount = 0
     private var refill = Totals(), refillCount = 0
@@ -113,13 +99,14 @@ final class GamePerformanceProfiler {
 #endif
     }
 
-    func recordAudio(scheduleMs: Double, activeVoices: Int, voiceStealCount: Int,
-                     droppedRequestCount: Int = 0) {
+    func recordComboAudio(triggerMs: Double, played: Bool, activeVoices: Int,
+                          voiceStealCount: Int = 0) {
 #if DEBUG
-        audio.add([scheduleMs, Double(activeVoices)])
-        audioCount += 1
+        audioTriggerMsTotal += triggerMs
+        audioRequestCount += 1
+        if played { audioPlayedCount += 1 } else { audioDroppedRequestCount += 1 }
+        audioPeakActiveVoices = max(audioPeakActiveVoices, activeVoices)
         audioVoiceStealCount += voiceStealCount
-        audioDroppedRequestCount += droppedRequestCount
 #endif
     }
 
@@ -173,11 +160,12 @@ final class GamePerformanceProfiler {
             print("[REMOVE_PERF] matchMs=\(formatted(v[0])) actionScheduleMs=\(formatted(v[1])) animationElapsedMs=\(formatted(v[2])) nodeCleanupMs=\(formatted(v[3])) samples=\(removeCount)")
             removeCount = 0
         }
-        if audioCount > 0 {
-            let v = audio.takeAverages()
-            print("[AUDIO_PERF] scheduleMs=\(formatted(v[0])) activeVoices=\(formatted(v[1])) voiceStealCount=\(audioVoiceStealCount) droppedRequests=\(audioDroppedRequestCount) samples=\(audioCount)")
-            audioCount = 0
-            audioVoiceStealCount = 0; audioDroppedRequestCount = 0
+        if audioRequestCount > 0 {
+            let averageTriggerMs = audioTriggerMsTotal / Double(audioRequestCount)
+            print("[AUDIO_PERF] comboRequests=\(audioRequestCount) comboPlayed=\(audioPlayedCount) comboDropped=\(audioDroppedRequestCount) activeVoices=\(audioPeakActiveVoices) voiceStealCount=\(audioVoiceStealCount) triggerMs=\(formatted(averageTriggerMs))")
+            audioTriggerMsTotal = 0
+            audioRequestCount = 0; audioPlayedCount = 0; audioDroppedRequestCount = 0
+            audioPeakActiveVoices = 0; audioVoiceStealCount = 0
         }
         if gravityCount > 0 {
             let v = gravity.takeAverages()
@@ -225,14 +213,14 @@ enum GlassSwapSoundPolicy {
     }
 }
 
-/// Preloads one PCM resource per note into retained player pools. Resolution
+/// Preloads the fixed Combo Foley and glass-swap PCM resources into retained
+/// player pools. Resolution
 /// never reads disk or creates players at the moment a combo starts removing.
 final class GameAudioManager: NSObject, AVAudioPlayerDelegate {
     typealias ResourceLookup = (_ name: String, _ extension: String) -> URL?
     static let shared = GameAudioManager()
-    static let comboVoiceCount = 8
+    static let comboVoiceCount = ComboVoicePoolPolicy.voiceLimit
     static let glassVoiceCount = 4
-    static let synchronizationLeadTime: TimeInterval = 0.012
     private let resourceLookup: ResourceLookup
     private var playerPools: [String: [AVAudioPlayer]] = [:]
     private var glassSwapGate = GlassSwapSoundGate()
@@ -260,9 +248,8 @@ final class GameAudioManager: NSObject, AVAudioPlayerDelegate {
         guard !didPreload else { return }
         didPreload = true
         configureAudioSessionIfNeeded()
-        for note in ComboSoundSequence.playbackNotes {
-            preloadResource(name: "combo_\(note)", voiceCount: Self.comboVoiceCount, volume: 0.38)
-        }
+        preloadResource(name: ComboSoundPolicy.resourceName,
+                        voiceCount: Self.comboVoiceCount, volume: 0.40)
         preloadResource(name: "orb_glass_swap", voiceCount: Self.glassVoiceCount, volume: 0.22)
     }
 
@@ -271,38 +258,30 @@ final class GameAudioManager: NSObject, AVAudioPlayerDelegate {
 #if DEBUG
         let scheduleStarted = GamePerformanceProfiler.timestamp
 #endif
-        guard ComboSoundSequence.soundIndex(for: comboNumber) != nil,
-              let names = ComboSoundSequence.resourceNames(for: comboNumber) else { return false }
+        guard let name = ComboSoundPolicy.resourceName(for: comboNumber) else { return false }
         preload()
         configureAudioSessionIfNeeded()
-        guard let primary = playerPools[names[0]]?.first(where: { !$0.isPlaying }),
-              let harmony = playerPools[names[1]]?.first(where: { !$0.isPlaying }) else {
+        guard let players = playerPools[name],
+              let index = ComboVoicePoolPolicy.firstIdleVoiceIndex(
+                voiceCount: players.count,
+                isPlaying: { players[$0].isPlaying }
+              ) else {
 #if DEBUG
-            let active = names.reduce(0) { $0 + (playerPools[$1]?.filter(\.isPlaying).count ?? 0) }
-            GamePerformanceProfiler.shared.recordAudio(
-                scheduleMs: (GamePerformanceProfiler.timestamp - scheduleStarted) * 1_000,
-                activeVoices: active, voiceStealCount: 0, droppedRequestCount: 1)
+            let active = playerPools[name]?.filter(\.isPlaying).count ?? 0
+            GamePerformanceProfiler.shared.recordComboAudio(
+                triggerMs: (GamePerformanceProfiler.timestamp - scheduleStarted) * 1_000,
+                played: false, activeVoices: active)
 #endif
             return false
         }
-        primary.currentTime = 0
-        harmony.currentTime = 0
-        // AVAudioPlayer device time shares the output clock. Scheduling both
-        // voices at one future timestamp avoids an audible arpeggio.
-        let startTime = max(primary.deviceCurrentTime, harmony.deviceCurrentTime)
-            + Self.synchronizationLeadTime
-        let primaryPlayed = primary.play(atTime: startTime)
-        let harmonyPlayed = harmony.play(atTime: startTime)
-        let played = primaryPlayed && harmonyPlayed
-        if !played {
-            primary.stop()
-            harmony.stop()
-        }
+        let player = players[index]
+        player.currentTime = 0
+        let played = player.play()
 #if DEBUG
-        let active = names.reduce(0) { $0 + (playerPools[$1]?.filter(\.isPlaying).count ?? 0) }
-        GamePerformanceProfiler.shared.recordAudio(
-            scheduleMs: (GamePerformanceProfiler.timestamp - scheduleStarted) * 1_000,
-            activeVoices: active, voiceStealCount: 0)
+        let active = playerPools[name]?.filter(\.isPlaying).count ?? 0
+        GamePerformanceProfiler.shared.recordComboAudio(
+            triggerMs: (GamePerformanceProfiler.timestamp - scheduleStarted) * 1_000,
+            played: played, activeVoices: active)
 #endif
         return played
     }
@@ -351,7 +330,7 @@ final class GameAudioManager: NSObject, AVAudioPlayerDelegate {
     }
 
     private func preloadResource(name: String, voiceCount: Int, volume: Float) {
-        guard let url = resourceLookup(name, ComboSoundSequence.fileExtension) else {
+        guard let url = resourceLookup(name, ComboSoundPolicy.fileExtension) else {
 #if DEBUG
             print("[AUDIO][ERROR] missing=\(name).wav")
 #endif
