@@ -564,18 +564,29 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
-    func testPianoResourcesExistAndDecodeInAppBundle() throws {
+    func testRecordedAudioResourcesExistAndDecodeInAppBundle() throws {
         let bundle = Bundle(for: GameScene.self)
         for note in ComboSoundSequence.notes {
             let url = try XCTUnwrap(bundle.url(forResource: "combo_\(note)", withExtension: "wav"))
             let player = try AVAudioPlayer(contentsOf: url)
-            XCTAssertEqual(player.duration, 0.300, accuracy: 0.005)
+            XCTAssertEqual(player.duration, 1.800, accuracy: 0.010)
             XCTAssertEqual(player.numberOfChannels, 1)
+            XCTAssertGreaterThan(try Data(contentsOf: url).count, 100_000)
+            let file = try AVAudioFile(forReading: url)
+            XCTAssertEqual(file.fileFormat.sampleRate, 44_100, accuracy: 0.5)
+            XCTAssertEqual(file.fileFormat.channelCount, 1)
+            XCTAssertEqual(file.fileFormat.commonFormat, .pcmFormatInt16)
         }
         let glassURL = try XCTUnwrap(bundle.url(forResource: "orb_glass_swap", withExtension: "wav"))
         let glassPlayer = try AVAudioPlayer(contentsOf: glassURL)
-        XCTAssertEqual(glassPlayer.duration, 0.120, accuracy: 0.005)
+        XCTAssertGreaterThanOrEqual(glassPlayer.duration, 0.140)
+        XCTAssertLessThanOrEqual(glassPlayer.duration, 0.175)
         XCTAssertEqual(glassPlayer.numberOfChannels, 1)
+        XCTAssertGreaterThan(try Data(contentsOf: glassURL).count, 10_000)
+        let glassFile = try AVAudioFile(forReading: glassURL)
+        XCTAssertEqual(glassFile.fileFormat.sampleRate, 44_100, accuracy: 0.5)
+        XCTAssertEqual(glassFile.fileFormat.channelCount, 1)
+        XCTAssertEqual(glassFile.fileFormat.commonFormat, .pcmFormatInt16)
     }
 
     func testComboAudioPreloadLooksUpEachResourceOnlyOnce() {
