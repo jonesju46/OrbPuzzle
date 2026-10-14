@@ -5,66 +5,98 @@ final class OrbNode: SKShapeNode {
     static let glassRimName = "orb-glass-rim"
     static let hebrewLabelName = "orb-hebrew-label"
 
-    let orbID: UUID
-    let orbType: OrbType
+    private(set) var orbID: UUID
+    private(set) var orbType: OrbType
+    private let innerTint = SKShapeNode()
+    private let innerRim = SKShapeNode()
+    private let shine = SKShapeNode()
+    private let hebrewLabel = SKLabelNode()
+    private var configuredDiameter: CGFloat = 0
 
     init(orb: Orb, diameter: CGFloat) {
         orbID = orb.id
         orbType = orb.type
         super.init()
-        path = CGPath(ellipseIn: CGRect(x: -diameter / 2, y: -diameter / 2, width: diameter, height: diameter), transform: nil)
-        let color = Self.color(for: orb.type)
+        isUserInteractionEnabled = false
+        innerTint.isUserInteractionEnabled = false
+        innerRim.name = Self.glassRimName
+        innerRim.isUserInteractionEnabled = false
+        shine.isUserInteractionEnabled = false
+        hebrewLabel.name = Self.hebrewLabelName
+        hebrewLabel.horizontalAlignmentMode = .center
+        hebrewLabel.verticalAlignmentMode = .center
+        hebrewLabel.isUserInteractionEnabled = false
+        addChild(innerTint)
+        addChild(innerRim)
+        addChild(shine)
+        addChild(hebrewLabel)
+        configureGeometry(diameter: diameter)
+        configureAppearance()
+        resetTransientState()
+    }
+
+    func prepareForReuse(orb: Orb, diameter: CGFloat) {
+        let typeChanged = orb.type != orbType
+        orbID = orb.id
+        orbType = orb.type
+        if abs(configuredDiameter - diameter) > 0.01 {
+            configureGeometry(diameter: diameter)
+        }
+        if typeChanged { configureAppearance() }
+        resetTransientState()
+    }
+
+    private func configureAppearance() {
+        let color = Self.color(for: orbType)
         fillColor = color.withAlphaComponent(0.80)
         strokeColor = .white.withAlphaComponent(0.78)
-        lineWidth = max(2, diameter * 0.045)
-        glowWidth = diameter * 0.035
-        name = "orb-\(orb.id.uuidString)"
-        isUserInteractionEnabled = false
-
-        let innerTint = SKShapeNode(circleOfRadius: diameter * 0.39)
         innerTint.fillColor = color.withAlphaComponent(0.24)
         innerTint.strokeColor = .clear
-        innerTint.position = CGPoint(x: diameter * 0.045, y: -diameter * 0.06)
         innerTint.zPosition = 1
-        innerTint.isUserInteractionEnabled = false
-        addChild(innerTint)
-
-        let innerRim = SKShapeNode(circleOfRadius: diameter * 0.43)
-        innerRim.name = Self.glassRimName
         innerRim.fillColor = .clear
         innerRim.strokeColor = .white.withAlphaComponent(0.25)
-        innerRim.lineWidth = max(1, diameter * 0.018)
         innerRim.zPosition = 2
-        innerRim.isUserInteractionEnabled = false
-        addChild(innerRim)
-
-        let shine = SKShapeNode(ellipseIn: CGRect(
-            x: -diameter * 0.16, y: -diameter * 0.075,
-            width: diameter * 0.32, height: diameter * 0.15
-        ))
         shine.fillColor = .white.withAlphaComponent(0.62)
         shine.strokeColor = .clear
-        shine.position = CGPoint(x: -diameter * 0.17, y: diameter * 0.20)
         shine.zRotation = -.pi / 7
         shine.zPosition = 3
-        shine.isUserInteractionEnabled = false
-        addChild(shine)
-
-        let label = SKLabelNode(text: orb.type.hebrewLabel)
-        let font = UIFont(name: "ArialHebrew-Bold", size: diameter * 0.38)
-            ?? UIFont.boldSystemFont(ofSize: diameter * 0.38)
-        label.name = Self.hebrewLabelName
-        label.fontName = font.fontName
-        label.fontSize = diameter * 0.38
-        label.fontColor = orb.type == .light
+        hebrewLabel.text = orbType.hebrewLabel
+        hebrewLabel.fontColor = orbType == .light
             ? SKColor(white: 0.16, alpha: 0.96)
             : .white.withAlphaComponent(0.98)
-        label.horizontalAlignmentMode = .center
-        label.verticalAlignmentMode = .center
-        label.position = CGPoint(x: 0, y: -diameter * 0.015)
-        label.zPosition = 4
-        label.isUserInteractionEnabled = false
-        addChild(label)
+        hebrewLabel.zPosition = 4
+    }
+
+    private func configureGeometry(diameter: CGFloat) {
+        configuredDiameter = diameter
+        path = CGPath(ellipseIn: CGRect(x: -diameter / 2, y: -diameter / 2,
+            width: diameter, height: diameter), transform: nil)
+        lineWidth = max(2, diameter * 0.045)
+        glowWidth = diameter * 0.035
+        innerTint.path = CGPath(ellipseIn: CGRect(x: -diameter * 0.39, y: -diameter * 0.39,
+            width: diameter * 0.78, height: diameter * 0.78), transform: nil)
+        innerTint.position = CGPoint(x: diameter * 0.045, y: -diameter * 0.06)
+        innerRim.path = CGPath(ellipseIn: CGRect(x: -diameter * 0.43, y: -diameter * 0.43,
+            width: diameter * 0.86, height: diameter * 0.86), transform: nil)
+        innerRim.lineWidth = max(1, diameter * 0.018)
+        shine.path = CGPath(ellipseIn: CGRect(
+            x: -diameter * 0.16, y: -diameter * 0.075,
+            width: diameter * 0.32, height: diameter * 0.15
+        ), transform: nil)
+        shine.position = CGPoint(x: -diameter * 0.17, y: diameter * 0.20)
+        let font = UIFont(name: "ArialHebrew-Bold", size: diameter * 0.38)
+            ?? UIFont.boldSystemFont(ofSize: diameter * 0.38)
+        hebrewLabel.fontName = font.fontName
+        hebrewLabel.fontSize = diameter * 0.38
+        hebrewLabel.position = CGPoint(x: 0, y: -diameter * 0.015)
+    }
+
+    private func resetTransientState() {
+        removeAllActions()
+        name = "orb-\(orbID.uuidString)"
+        alpha = 1
+        setScale(1)
+        zPosition = 0
     }
 
     @available(*, unavailable)

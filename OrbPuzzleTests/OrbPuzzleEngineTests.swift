@@ -441,51 +441,19 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(config.cards.count, 5)
     }
 
-    func testComboSoundIndexLoopsEveryTwentyOneCombos() {
-        let expected: [Int: Int] = [
-            1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7,
-            8: 8, 9: 9, 10: 10, 14: 14, 15: 15, 21: 21, 22: 1, 63: 21, 64: 1
-        ]
-
-        for (comboNumber, soundIndex) in expected {
-            XCTAssertEqual(
-                ComboSoundSequence.soundIndex(for: comboNumber),
-                Optional(soundIndex)
-            )
+    func testEveryPositiveComboUsesOneFixedSoundIndex() {
+        for comboNumber in [1, 2, 10, 21, 22, 64, 99] {
+            XCTAssertEqual(ComboSoundSequence.soundIndex(for: comboNumber), 1)
         }
         XCTAssertNil(ComboSoundSequence.soundIndex(for: 0))
         XCTAssertNil(ComboSoundSequence.soundIndex(for: -1))
     }
 
-    func testComboOneThroughTwentyOneUseSynchronizedDualNoteMapping() {
-        let expected = [
-            ComboSoundPair(primary: "C3", harmony: "E3"),
-            ComboSoundPair(primary: "D3", harmony: "F3"),
-            ComboSoundPair(primary: "E3", harmony: "G3"),
-            ComboSoundPair(primary: "F3", harmony: "A3"),
-            ComboSoundPair(primary: "G3", harmony: "B3"),
-            ComboSoundPair(primary: "A3", harmony: "C4"),
-            ComboSoundPair(primary: "B3", harmony: "D4"),
-            ComboSoundPair(primary: "C4", harmony: "E4"),
-            ComboSoundPair(primary: "D4", harmony: "F4"),
-            ComboSoundPair(primary: "E4", harmony: "G4"),
-            ComboSoundPair(primary: "F4", harmony: "A4"),
-            ComboSoundPair(primary: "G4", harmony: "B4"),
-            ComboSoundPair(primary: "A4", harmony: "C5"),
-            ComboSoundPair(primary: "B4", harmony: "D5"),
-            ComboSoundPair(primary: "C5", harmony: "E5"),
-            ComboSoundPair(primary: "D5", harmony: "F5"),
-            ComboSoundPair(primary: "E5", harmony: "G5"),
-            ComboSoundPair(primary: "F5", harmony: "A5"),
-            ComboSoundPair(primary: "G5", harmony: "B5"),
-            ComboSoundPair(primary: "A5", harmony: "C5"),
-            ComboSoundPair(primary: "B5", harmony: "D5")
-        ]
-
-        XCTAssertEqual((1...21).compactMap(ComboSoundSequence.notePair(for:)), expected)
-        XCTAssertEqual(ComboSoundSequence.notePair(for: 22), expected[0])
-        XCTAssertEqual(ComboSoundSequence.notePair(for: 23), expected[1])
-        XCTAssertTrue(expected.allSatisfy { $0.primary != $0.harmony })
+    func testEveryComboUsesSynchronizedB5D5Harmony() {
+        let expected = ComboSoundPair(primary: "B5", harmony: "D5")
+        XCTAssertEqual((1...99).compactMap(ComboSoundSequence.notePair(for:)),
+                       Array(repeating: expected, count: 99))
+        XCTAssertEqual(ComboSoundSequence.resourceNames(for: 1), ["combo_B5", "combo_D5"])
         XCTAssertGreaterThan(GameAudioManager.synchronizationLeadTime, 0)
     }
 
@@ -505,8 +473,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
             soundPairs.append(ComboSoundSequence.notePair(for: comboNumber)!)
         }
 
-        XCTAssertEqual(soundIndices, [1, 2, 3, 4, 5, 6, 7, 8])
-        XCTAssertEqual(soundPairs, (1...8).compactMap(ComboSoundSequence.notePair(for:)))
+        XCTAssertEqual(soundIndices, Array(repeating: 1, count: 8))
+        XCTAssertEqual(soundPairs, Array(repeating: ComboSoundSequence.fixedPair, count: 8))
         XCTAssertEqual(controller.comboCount, 8)
     }
 
@@ -524,7 +492,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             return ComboSoundSequence.soundIndex(for: comboNumber) ?? 0
         }
 
-        XCTAssertEqual(soundIndices, [3, 4])
+        XCTAssertEqual(soundIndices, [1, 1])
         XCTAssertEqual(controller.manualComboByType[.water], 2)
     }
 
@@ -551,22 +519,21 @@ final class OrbPuzzleEngineTests: XCTestCase {
             return nil
         }
         XCTAssertFalse(audioManager.playComboSound(comboNumber: 5))
-        XCTAssertTrue(requested.contains("combo_G3.wav"))
+        XCTAssertTrue(requested.contains("combo_B5.wav"))
+        XCTAssertTrue(requested.contains("combo_D5.wav"))
     }
 
-    func testPianoNotesCycleAcrossExactlyThreeOctaves() {
-        let expected = [1:"C3",7:"B3",8:"C4",14:"B4",15:"C5",21:"B5",22:"C3",
-                        28:"B3",29:"C4",35:"B4",36:"C5",42:"B5",43:"C3",63:"B5",64:"C3"]
-        XCTAssertEqual(ComboSoundSequence.notes.count, 21)
-        for (combo, note) in expected {
-            XCTAssertEqual(ComboSoundSequence.note(for: combo), note)
-            XCTAssertEqual(ComboSoundSequence.resourceName(for: combo), "combo_\(note)")
-        }
+    func testRecordedPianoAssetInventoryAndPlaybackSubset() {
+        XCTAssertEqual(ComboSoundSequence.assetNotes.count, 21)
+        XCTAssertEqual(ComboSoundSequence.playbackNotes, ["B5", "D5"])
+        XCTAssertEqual(ComboSoundSequence.note(for: 1), "B5")
+        XCTAssertEqual(ComboSoundSequence.note(for: 99), "B5")
+        XCTAssertEqual(ComboSoundSequence.resourceName(for: 99), "combo_B5")
     }
 
     func testRecordedAudioResourcesExistAndDecodeInAppBundle() throws {
         let bundle = Bundle(for: GameScene.self)
-        for note in ComboSoundSequence.notes {
+        for note in ComboSoundSequence.assetNotes {
             let url = try XCTUnwrap(bundle.url(forResource: "combo_\(note)", withExtension: "wav"))
             let player = try AVAudioPlayer(contentsOf: url)
             XCTAssertEqual(player.duration, 1.800, accuracy: 0.010)
@@ -595,11 +562,23 @@ final class OrbPuzzleEngineTests: XCTestCase {
         manager.preload()
         manager.preload()
         _ = manager.playComboSound(comboNumber: 1)
-        XCTAssertEqual(requests.count, 22)
+        XCTAssertEqual(requests.count, 3)
         XCTAssertEqual(Set(requests),
-            Set(ComboSoundSequence.notes.map { "combo_\($0)" } + ["orb_glass_swap"]))
-        XCTAssertEqual(GameAudioManager.comboVoiceCount, 6)
+            Set(ComboSoundSequence.playbackNotes.map { "combo_\($0)" } + ["orb_glass_swap"]))
+        XCTAssertEqual(GameAudioManager.comboVoiceCount, 8)
         XCTAssertEqual(GameAudioManager.glassVoiceCount, 4)
+    }
+
+    func testFixedPianoPoolCoversResolveOverlapWithoutVoiceStealing() {
+        let groupCadence = GameSettings.Tuning.resolveHighlightDuration
+            + GameSettings.Tuning.removeDuration
+            + GameSettings.Tuning.resolvePhaseDelay
+        let recordedNoteDuration = 1.8
+        let maximumExpectedOverlap = Int(ceil(recordedNoteDuration / groupCadence))
+
+        XCTAssertEqual(maximumExpectedOverlap, 6)
+        XCTAssertGreaterThan(GameAudioManager.comboVoiceCount, maximumExpectedOverlap)
+        XCTAssertEqual(ComboSoundSequence.playbackNotes.count, 2)
     }
 
     func testMatchPreviewAndFriendlyPlanningDoNotRequestAudioResources() {
@@ -663,6 +642,30 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
     }
 
+    func testOrbNodeReusePreservesGlassChildrenAndRebindsIdentity() throws {
+        let first = Orb(type: .water)
+        let second = Orb(type: .fire)
+        let node = OrbNode(orb: first, diameter: 64)
+        let originalChildren = node.children
+
+        node.alpha = 0.2
+        node.setScale(0.3)
+        node.prepareForReuse(orb: second, diameter: 64)
+
+        XCTAssertEqual(node.orbID, second.id)
+        XCTAssertEqual(node.orbType, .fire)
+        XCTAssertEqual(node.alpha, 1)
+        XCTAssertEqual(node.xScale, 1)
+        XCTAssertEqual(node.yScale, 1)
+        XCTAssertEqual(node.children.count, originalChildren.count)
+        XCTAssertTrue(zip(node.children, originalChildren).allSatisfy { pair in
+            pair.0 === pair.1
+        })
+        let label = try XCTUnwrap(
+            node.childNode(withName: OrbNode.hebrewLabelName) as? SKLabelNode)
+        XCTAssertEqual(label.text, OrbType.fire.hebrewLabel)
+    }
+
     func testNewTurnRestartsComboSoundAtOne() {
         let controller = ComboController()
         var lastSoundIndex = 0
@@ -671,13 +674,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
             let comboNumber = controller.add(type: .heart, groups: 1, source: .skyfall)
             lastSoundIndex = ComboSoundSequence.soundIndex(for: comboNumber) ?? 0
         }
-        XCTAssertEqual(lastSoundIndex, 12)
+        XCTAssertEqual(lastSoundIndex, 1)
 
         controller.reset()
         let firstCombo = controller.add(type: .heart, groups: 1, source: .manual)
         XCTAssertEqual(ComboSoundSequence.soundIndex(for: firstCombo), Optional(1))
         XCTAssertEqual(ComboSoundSequence.notePair(for: firstCombo),
-                       ComboSoundPair(primary: "C3", harmony: "E3"))
+                       ComboSoundPair(primary: "B5", harmony: "D5"))
     }
 
     func testNewGameCreatesThirtyNewOrbIDsAndResetsTransientState() {
@@ -1917,17 +1920,22 @@ final class OrbPuzzleEngineTests: XCTestCase {
             let slots = grid.emptyPositions()
             let boardNode = SKNode()
             var completionCount = 0
+            var nodeProviderCount = 0
             let result = RefillController().refillEmptySlots(
                 grid: grid, slots: slots,
                 types: Array(repeating: .water, count: slots.count),
                 boardNode: boardNode, cellSize: CGSize(width: 50, height: 50),
                 pointForPosition: {
                     CGPoint(x: CGFloat($0.column) * 50, y: CGFloat($0.row) * 50)
+                }, nodeProvider: { orb, diameter in
+                    nodeProviderCount += 1
+                    return OrbNode(orb: orb, diameter: diameter)
                 }, completion: { _ in completionCount += 1 })
 
             XCTAssertEqual(result.spawns.count, refillCount)
             XCTAssertEqual(result.nodes.count, refillCount)
             XCTAssertEqual(result.descriptors.count, refillCount)
+            XCTAssertEqual(nodeProviderCount, refillCount)
             XCTAssertEqual(completionCount, 0, "Completion must wait for SKAction")
             XCTAssertTrue(zip(result.nodes, result.descriptors).allSatisfy { node, descriptor in
                 node.position == descriptor.start
@@ -2810,6 +2818,31 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(grid.orb(at: GridPosition(row: 2, column: 0))?.type, .dark)
         XCTAssertNil(grid.orb(at: GridPosition(row: 3, column: 0)))
         XCTAssertNil(grid.orb(at: GridPosition(row: 4, column: 0)))
+    }
+
+    func testGravityWaitsForScheduledMoveActionsBeforeCompletion() {
+        let grid = OrbGrid(types: [
+            [.fire], [.water], [.wood], [.light], [.dark]
+        ])
+        _ = grid.remove([GridPosition(row: 1, column: 0), GridPosition(row: 3, column: 0)])
+        let remainingOrbs = grid.cells.flatMap { $0 }.compactMap { $0 }
+        let nodes = Dictionary(uniqueKeysWithValues: remainingOrbs.map { orb in
+            (orb.id, OrbNode(orb: orb, diameter: 40))
+        })
+        var completionCalled = false
+
+        let duration = GravityController().apply(
+            to: grid, nodes: nodes,
+            pointForPosition: {
+                CGPoint(x: CGFloat($0.column) * 40, y: CGFloat($0.row) * 40)
+            },
+            completion: { completionCalled = true })
+
+        XCTAssertEqual(duration, GameSettings.Tuning.fallDuration)
+        XCTAssertFalse(completionCalled)
+        XCTAssertTrue(nodes.values.contains { node in
+            node.action(forKey: GravityController.fallActionKey) != nil
+        })
     }
 
     func testResolveOrderPlacesWaterBeforeFireAndDark() {

@@ -1,5 +1,13 @@
 import Foundation
 
+#if DEBUG
+private enum FriendlyDebugLog {
+    /// Detailed candidate/roll dumps are opt-in because synchronous console
+    /// output can contend with SpriteKit during large cascades.
+    static let verbose = false
+}
+#endif
+
 struct FriendlyRefillRoll: Equatable, Sendable {
     let groupCount: Int
     let probability: Double
@@ -761,7 +769,9 @@ final class SkyfallController {
             let limited = visited >= perSearchLimit || validations >= validationLimit
             lastFriendlySearchLimited = lastFriendlySearchLimited || limited
 #if DEBUG
-            print("[FRIENDLY_V4_SEARCH] templateIDs=\(templates.map(\.sourceIndex)) nodes=\(visited)/\(perSearchLimit) validations=\(validations)/\(validationLimit) limited=\(limited)")
+            if FriendlyDebugLog.verbose {
+                print("[FRIENDLY_V4_SEARCH] templateIDs=\(templates.map(\.sourceIndex)) nodes=\(visited)/\(perSearchLimit) validations=\(validations)/\(validationLimit) limited=\(limited)")
+            }
 #endif
             if let types = acceptedTypes {
                 let forced = Dictionary(uniqueKeysWithValues: acceptedPlacements.flatMap { placement in
@@ -881,7 +891,9 @@ final class SkyfallController {
         let limited = visited >= nodeLimit || checks >= validationLimit
             || sizes.contains { analyses[$0]?.candidateSearchLimited == true }
 #if DEBUG
-        print("[FRIENDLY_SEARCH] sizes=\(sizes) nodes=\(visited)/\(nodeLimit) validations=\(checks)/\(validationLimit) candidateLimited=\(limited)")
+        if FriendlyDebugLog.verbose {
+            print("[FRIENDLY_SEARCH] sizes=\(sizes) nodes=\(visited)/\(nodeLimit) validations=\(checks)/\(validationLimit) candidateLimited=\(limited)")
+        }
 #endif
         guard let result else {
             let colorsRejected = sizes.contains { analyses[$0]?.candidates.isEmpty == true }
@@ -1324,18 +1336,20 @@ enum FriendlyRefillPipeline {
         var attempts = 0
         var waveNodes = 0
 #if DEBUG
-        print("[FRIENDLY_V4] mode=\(decision.mode.rawValue) previousSizes=\(decision.previousSizes) buckets=\(decision.bucketDecisions.count) slots=\(slots.count)")
-        for template in sourceTemplates {
-            print("[FRIENDLY_TEMPLATE] id=\(template.sourceIndex) type=\(template.orbType.rawValue) size=\(template.matchSize) offsets=\(describe(template.normalizedOffsets)) original=\(describe(Array(template.originalPositions)))")
-        }
-        for bucket in decision.bucketDecisions {
-            print("[FRIENDLY_BUCKET] matchSize=\(bucket.matchSize) startingCombo=\(bucket.startingCombo) probability=\(bucket.probability) selectedTarget=\(bucket.selectedTarget)")
-            for item in bucket.rolls {
-                print("[FRIENDLY_ROLL] size=\(bucket.matchSize) target=\(item.groupCount) roll=\(item.roll) result=\(item.succeeded ? "GO" : "MISS")")
+        if FriendlyDebugLog.verbose {
+            print("[FRIENDLY_V4] mode=\(decision.mode.rawValue) previousSizes=\(decision.previousSizes) buckets=\(decision.bucketDecisions.count) slots=\(slots.count)")
+            for template in sourceTemplates {
+                print("[FRIENDLY_TEMPLATE] id=\(template.sourceIndex) type=\(template.orbType.rawValue) size=\(template.matchSize) offsets=\(describe(template.normalizedOffsets)) original=\(describe(Array(template.originalPositions)))")
             }
+            for bucket in decision.bucketDecisions {
+                print("[FRIENDLY_BUCKET] matchSize=\(bucket.matchSize) startingCombo=\(bucket.startingCombo) probability=\(bucket.probability) selectedTarget=\(bucket.selectedTarget)")
+                for item in bucket.rolls {
+                    print("[FRIENDLY_ROLL] size=\(bucket.matchSize) target=\(item.groupCount) roll=\(item.roll) result=\(item.succeeded ? "GO" : "MISS")")
+                }
+            }
+            print("[FRIENDLY_MERGED] status=\(decision.friendlyHit ? "PROBABILITY_GO" : "ALL_PROBABILITY_MISS") requestedSizes=\(requested) requestedGroups=\(requested.count) requestedOrbs=\(requested.reduce(0, +))")
+            print("[FRIENDLY_BOARD] snapshot=\(grid.cells.map { $0.map { $0?.type.rawValue ?? "_" } }) slots=\(describe(slots))")
         }
-        print("[FRIENDLY_MERGED] status=\(decision.friendlyHit ? "PROBABILITY_GO" : "ALL_PROBABILITY_MISS") requestedSizes=\(requested) requestedGroups=\(requested.count) requestedOrbs=\(requested.reduce(0, +))")
-        print("[FRIENDLY_BOARD] snapshot=\(grid.cells.map { $0.map { $0?.type.rawValue ?? "_" } }) slots=\(describe(slots))")
 #endif
         if called {
             if planProvider == nil {
@@ -1407,7 +1421,9 @@ enum FriendlyRefillPipeline {
                     if plan == nil { reason = "assignment-failure" }
                     reasons.append(reason)
 #if DEBUG
-                    print("[FRIENDLY_TRY] sizes=\(sizes) attempt=\(attempts)/\(subsetAttemptLimit) reason=\(reason)")
+                    if FriendlyDebugLog.verbose {
+                        print("[FRIENDLY_TRY] sizes=\(sizes) attempt=\(attempts)/\(subsetAttemptLimit) reason=\(reason)")
+                    }
 #endif
                 }
             }

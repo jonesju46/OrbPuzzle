@@ -1,6 +1,15 @@
 import SpriteKit
 import UIKit
 
+#if DEBUG
+private let gameplayVerboseLoggingEnabled = false
+private func gameplayVerboseLog(_ message: @autoclosure () -> String) {
+    // Enable locally only for deep functional diagnosis. Per-combo/cascade
+    // console I/O is intentionally off during frame profiling.
+    if gameplayVerboseLoggingEnabled { print(message()) }
+}
+#endif
+
 final class GameScene: SKScene {
     private let grid = OrbGrid()
     private let matchDetector = MatchDetector()
@@ -45,6 +54,9 @@ final class GameScene: SKScene {
     private var monsterHPBarFrame = CGRect.zero
     private var playerHPBarFrame = CGRect.zero
     private var orbNodes: [UUID: OrbNode] = [:]
+    private var recycledOrbNodes: [OrbNode] = []
+    private let friendlyPlanningQueue = DispatchQueue(
+        label: "com.orbpuzzle.friendly-planning", qos: .utility)
     private var debugLabels: [SKLabelNode] = []
     private var orbTypeDebugLabels: [SKLabelNode] = []
 #if DEBUG
@@ -52,12 +64,15 @@ final class GameScene: SKScene {
     private var friendlyDebugDetectedGroups: Int?
     private var friendlyDebugStatistics: [Int: FriendlyRefillDebugStatistics] = [:]
     private var friendlyTargetStatistics: [Int: FriendlyTargetDebugStatistics] = [:]
+    private var lastDebugHUDUpdate = 0.0
+    private var cachedDebugText: [String] = []
+    private var cachedOrbDebugText: [String] = []
 #endif
     private var boardFrame = CGRect.zero
     private var cellSize = CGSize.zero
     private var gameState: GameState = .idle {
         didSet {
-            updateDebugOverlay()
+            updateDebugOverlay(force: oldValue != gameState)
 #if DEBUG
             if gameState == .idle { validateIdleBoard() }
 #endif
@@ -69,6 +84,8 @@ final class GameScene: SKScene {
         configured: GameSettings.defaultSkyfallComboCount
     )
     private var lastUpdateTime: TimeInterval = 0
+    private var lastTimerTenths: Int?
+    private var lastTimerColorBand: Int?
     private var forcedEndInProgress = false
     private var gameSessionFence = GameSessionFence()
     private var resolveGeneration: UInt = 0
@@ -91,7 +108,7 @@ final class GameScene: SKScene {
         turnController.duration = turnDuration
         self.noResolveDuringTurn = noResolveDuringTurn
         requestedSkyfallCombos = min(max(skyfallComboCount, 0), 99)
-        updateDebugOverlay()
+        updateDebugOverlay(force: true)
     }
 
     var sessionSnapshot: GameSessionSnapshot {
@@ -137,7 +154,7 @@ final class GameScene: SKScene {
         for label in cardDamageLabels { label.removeAllActions() }
         for node in orbNodes.values {
             node.removeAllActions()
-            node.removeFromParent()
+            recycleOrbNode(node)
         }
         orbNodes.removeAll(keepingCapacity: true)
 
@@ -167,7 +184,7 @@ final class GameScene: SKScene {
         updateTimerUI()
         updateBattleUI()
         updateCardUI()
-        updateDebugOverlay()
+        updateDebugOverlay(force: true)
 
 #if DEBUG
         let newOrbIDs = sessionSnapshot.orbIDs
@@ -583,7 +600,7 @@ final class GameScene: SKScene {
 
     private func layoutAllOrbs(rebuild: Bool = false) {
         if rebuild {
-            for node in orbNodes.values { node.removeFromParent() }
+            for node in orbNodes.values { recycleOrbNode(node) }
             orbNodes.removeAll(keepingCapacity: true)
         }
         guard cellSize.width > 0 else { return }
@@ -595,13 +612,31 @@ final class GameScene: SKScene {
                 if let existing = orbNodes[orb.id] {
                     node = existing
                 } else {
-                    node = OrbNode(orb: orb, diameter: min(cellSize.width, cellSize.height) * 0.82)
+                    node = dequeueOrbNode(
+                        for: orb,
+                        diameter: min(cellSize.width, cellSize.height) * 0.82
+                    )
                     orbNodes[orb.id] = node
                     boardNode.addChild(node)
                 }
                 node.position = point(for: position)
             }
         }
+    }
+
+    private func recycleOrbNode(_ node: OrbNode) {
+        node.removeAllActions()
+        node.removeFromParent()
+        guard recycledOrbNodes.count < grid.rows * grid.columns else { return }
+        recycledOrbNodes.append(node)
+    }
+
+    private func dequeueOrbNode(for orb: Orb, diameter: CGFloat) -> OrbNode {
+        if let node = recycledOrbNodes.popLast() {
+            node.prepareForReuse(orb: orb, diameter: diameter)
+            return node
+        }
+        return OrbNode(orb: orb, diameter: diameter)
     }
 
     private func point(for position: GridPosition) -> CGPoint {
@@ -636,6 +671,7 @@ final class GameScene: SKScene {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        let touchStarted = GamePerformanceProfiler.timestamp
         guard gameState == .selected || gameState == .dragging,
               let touch = touches.first,
               let selectedID = turnController.selectedOrbID,
@@ -648,6 +684,7 @@ final class GameScene: SKScene {
         )
         selectedNode.position = clamped
 
+        let pathStarted = GamePerformanceProfiler.timestamp
         let traversed = TurnController.traversedPositions(
             from: previousTouch,
             to: clamped,
@@ -655,28 +692,41 @@ final class GameScene: SKScene {
             rows: grid.rows,
             columns: grid.columns
         )
+        let pathMs = (GamePerformanceProfiler.timestamp - pathStarted) * 1_000
+        var swapMs = 0.0
+        var spriteMs = 0.0
+        var audioMs = 0.0
         for destination in traversed.dropFirst() {
+            let swapStarted = GamePerformanceProfiler.timestamp
             guard let current = turnController.currentPosition,
                   current.isAdjacent(to: destination),
                   let displacedOrb = grid.orb(at: destination),
                   grid.swap(current, destination) else { continue }
+            swapMs += (GamePerformanceProfiler.timestamp - swapStarted) * 1_000
             if GlassSwapSoundPolicy.shouldRequestPlayback(
                 didSwap: true,
                 isDragActive: gameState == .selected || gameState == .dragging
             ) {
+                let audioStarted = GamePerformanceProfiler.timestamp
                 GameAudioManager.shared.playGlassSwapSound()
+                audioMs += (GamePerformanceProfiler.timestamp - audioStarted) * 1_000
             }
             if !turnController.isTiming {
                 resetComboDisplay()
                 turnController.beginTiming(at: lastUpdateTime)
             }
-            gameState = .dragging
+            if gameState != .dragging { gameState = .dragging }
+            let spriteStarted = GamePerformanceProfiler.timestamp
             let displacedNode = orbNodes[displacedOrb.id]
             displacedNode?.removeAction(forKey: "swap")
             displacedNode?.run(.move(to: point(for: current), duration: GameSettings.Tuning.swapDuration), withKey: "swap")
+            spriteMs += (GamePerformanceProfiler.timestamp - spriteStarted) * 1_000
             turnController.advance(to: destination)
         }
         turnController.rememberTouch(clamped)
+        GamePerformanceProfiler.shared.recordDrag(
+            touchMs: (GamePerformanceProfiler.timestamp - touchStarted) * 1_000,
+            pathMs: pathMs, swapMs: swapMs, spriteMs: spriteMs, audioMs: audioMs)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endGesture(cancelled: false) }
@@ -728,7 +778,7 @@ final class GameScene: SKScene {
             turnController.completeSession()
         }
         updateTimerUI()
-        updateDebugOverlay()
+        updateDebugOverlay(force: true)
         resolveTurn()
     }
 
@@ -739,7 +789,10 @@ final class GameScene: SKScene {
         resolveLifecycle.start()
         gameState = .resolving
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
+        let matchStarted = GamePerformanceProfiler.timestamp
         let initialMatches = matchDetector.detect(in: grid)
+        GamePerformanceProfiler.shared.recordRemove(
+            matchMs: (GamePerformanceProfiler.timestamp - matchStarted) * 1_000)
 #if DEBUG
         if initialMatches.isEmpty {
             print("[MANUAL_RESOLVE] resolveID=\(resolveID) groupCount=0 groupSizes=[] removedPositions=[] removedCount=0")
@@ -764,7 +817,7 @@ final class GameScene: SKScene {
         }
 #if DEBUG
         let traceTag = source == .manual ? "MANUAL_RESOLVE" : "SKYFALL_RESOLVE"
-        print("[\(traceTag)] resolveID=\(resolveID) groupCount=\(resolveResult.comboCount) groupSizes=\(resolveResult.matches.map { $0.positions.count }) removedPositions=\(FriendlyRefillPipeline.describe(Array(resolveResult.removedPositions))) removedCount=\(resolveResult.removedOrbCount)")
+        gameplayVerboseLog("[\(traceTag)] resolveID=\(resolveID) groupCount=\(resolveResult.comboCount) groupSizes=\(resolveResult.matches.map { $0.positions.count }) removedPositions=\(FriendlyRefillPipeline.describe(Array(resolveResult.removedPositions))) removedCount=\(resolveResult.removedOrbCount)")
 #endif
         execute(
             resolveResult.steps,
@@ -797,7 +850,7 @@ final class GameScene: SKScene {
                 source: source
             )
             comboController.animate(label: comboLabel)
-            updateDebugOverlay()
+            updateDebugOverlay(force: true)
             GameAudioManager.shared.playComboSound(comboNumber: comboNumber)
             let removed = grid.remove(phase.removedPositions)
 #if DEBUG
@@ -813,11 +866,16 @@ final class GameScene: SKScene {
                     self.logStaleCompletion("remove phase")
                     return
                 }
+                let cleanupStarted = GamePerformanceProfiler.timestamp
                 for orb in removed {
-                    self.orbNodes.removeValue(forKey: orb.id)?.removeFromParent()
+                    if let node = self.orbNodes.removeValue(forKey: orb.id) {
+                        self.recycleOrbNode(node)
+                    }
                 }
+                GamePerformanceProfiler.shared.recordRemove(
+                    nodeCleanupMs: (GamePerformanceProfiler.timestamp - cleanupStarted) * 1_000)
 #if DEBUG
-                print("[RESOLVE] group=\(phase.type.rawValue) orbs=\(phase.removedOrbCount)")
+                gameplayVerboseLog("[RESOLVE] group=\(phase.type.rawValue) orbs=\(phase.removedOrbCount)")
 #endif
                 self.run(after: GameSettings.Tuning.resolvePhaseDelay) { [weak self] in
                     self?.execute(
@@ -840,34 +898,33 @@ final class GameScene: SKScene {
 #endif
             gameState = .falling
 #if DEBUG
-            print("[RESOLVE] gravity removed=\(expectedRemovedOrbCount)")
+            gameplayVerboseLog("[RESOLVE] gravity removed=\(expectedRemovedOrbCount)")
 #endif
-            let fallDuration = gravityController.apply(
+            _ = gravityController.apply(
                 to: grid,
                 nodes: orbNodes,
-                pointForPosition: { self.point(for: $0) }
+                pointForPosition: { self.point(for: $0) },
+                completion: { [weak self] in
+                    guard let self else { return }
+                    guard resolveID == self.activeResolveID,
+                          self.resolveLifecycle.acceptsSkyfallCompletion,
+                          self.gameState == .falling else {
+                        self.logStaleCompletion("gravity")
+                        return
+                    }
+                    self.execute(
+                        steps,
+                        at: index + 1,
+                        result: result,
+                        source: source,
+                        resolveID: resolveID
+                    )
+                }
             )
 #if DEBUG
             let emptyPositionsAfterCollapse = grid.emptyPositions()
-            print("[GRAVITY] resolveID=\(resolveID) emptyPositionsBefore=\(FriendlyRefillPipeline.describe(emptyPositionsBefore)) emptyPositionsAfterCollapse=\(FriendlyRefillPipeline.describe(emptyPositionsAfterCollapse)) emptyCount=\(emptyPositionsAfterCollapse.count)")
+            gameplayVerboseLog("[GRAVITY] resolveID=\(resolveID) emptyPositionsBefore=\(FriendlyRefillPipeline.describe(emptyPositionsBefore)) emptyPositionsAfterCollapse=\(FriendlyRefillPipeline.describe(emptyPositionsAfterCollapse)) emptyCount=\(emptyPositionsAfterCollapse.count)")
 #endif
-            run(after: fallDuration) { [weak self] in
-                guard let self else { return }
-                guard resolveID == self.activeResolveID,
-                      self.resolveLifecycle.acceptsSkyfallCompletion,
-                      self.gameState == .falling else {
-                    self.logStaleCompletion("gravity")
-                    return
-                }
-                self.execute(
-                    steps,
-                    at: index + 1,
-                    result: result,
-                    source: source,
-                    resolveID: resolveID
-                )
-            }
-
         case let .refill(expectedRefillCount: expectedRefillCount):
             refillAndContinue(
                 expectedRefillCount: expectedRefillCount,
@@ -887,6 +944,7 @@ final class GameScene: SKScene {
         }
 
         let sessionID = gameSessionFence.id
+        let animationStarted = GamePerformanceProfiler.timestamp
         let action = SKAction.sequence([
             .scale(to: 1.12, duration: GameSettings.Tuning.resolveHighlightDuration),
             .group([
@@ -894,14 +952,21 @@ final class GameScene: SKScene {
                 .scale(to: 0.2, duration: GameSettings.Tuning.removeDuration)
             ])
         ])
+        let scheduleStarted = GamePerformanceProfiler.timestamp
         var remainingNodeCount = nodes.count
         for node in nodes {
             node.run(action) { [weak self] in
                 guard let self, self.gameSessionFence.accepts(sessionID) else { return }
                 remainingNodeCount -= 1
-                if remainingNodeCount == 0 { completion() }
+                if remainingNodeCount == 0 {
+                    GamePerformanceProfiler.shared.recordRemove(
+                        animationElapsedMs: (GamePerformanceProfiler.timestamp - animationStarted) * 1_000)
+                    completion()
+                }
             }
         }
+        GamePerformanceProfiler.shared.recordRemove(
+            actionScheduleMs: (GamePerformanceProfiler.timestamp - scheduleStarted) * 1_000)
     }
 
     private func refillAndContinue(
@@ -955,11 +1020,11 @@ final class GameScene: SKScene {
     ) {
         let sessionID = gameSessionFence.id
         let typeSnapshot = grid.typeSnapshot
-        let started = ProcessInfo.processInfo.systemUptime
+        let started = GamePerformanceProfiler.timestamp
 #if DEBUG
-        print("[PLANNER_TIME] scheduled mainThread=\(Thread.isMainThread) slots=\(refillSlots.count)")
+        gameplayVerboseLog("[PLANNER_TIME] scheduled mainThread=\(Thread.isMainThread) slots=\(refillSlots.count)")
 #endif
-        DispatchQueue.global(qos: .userInitiated).async {
+        friendlyPlanningQueue.async {
             let plannerRanOnMainThread = Thread.isMainThread
             let planningGrid = OrbGrid(typeSnapshot: typeSnapshot)
             let planningController = SkyfallController()
@@ -967,7 +1032,7 @@ final class GameScene: SKScene {
             let preparation = FriendlyRefillPipeline.prepare(
                 grid: planningGrid, previousResolution: previousResolution,
                 controller: planningController)
-            let totalMs = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            let totalMs = (GamePerformanceProfiler.timestamp - started) * 1_000
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 guard self.gameSessionFence.accepts(sessionID),
@@ -981,11 +1046,15 @@ final class GameScene: SKScene {
                 }
 #if DEBUG
                 let timing = preparation.plannerTiming
-                print("[PLANNER_TIME] analyzerMs=\(String(format: "%.2f", timing.analyzerMs)) candidateMs=\(String(format: "%.2f", timing.candidateMs)) searchMs=\(String(format: "%.2f", timing.searchMs)) validationMs=\(String(format: "%.2f", timing.validationMs)) totalMs=\(String(format: "%.2f", totalMs)) mainThread=\(plannerRanOnMainThread)")
+                GamePerformanceProfiler.shared.recordFriendly(
+                    analyzerMs: timing.analyzerMs, candidateMs: timing.candidateMs,
+                    searchMs: timing.searchMs, validationMs: timing.validationMs,
+                    totalMs: totalMs)
                 let outcome = preparation.usesFriendlyTypes
                     ? (preparation.fullSuccess ? "full-plan" : "partial-plan")
                     : (preparation.failureCategory ?? "assignment-failure")
-                print("[CASCADE_POLICY] resolveID=\(resolveID) actualSizes=\(preparation.sourceTemplates.map(\.matchSize)) templateTypes=\(preparation.sourceTemplates.map { $0.orbType.rawValue }) outcome=\(outcome) requestedSizes=\(preparation.decision.requestedSizes) plannedSizes=\(preparation.plannedSizes)")
+                gameplayVerboseLog("[CASCADE_POLICY] resolveID=\(resolveID) actualSizes=\(preparation.sourceTemplates.map(\.matchSize)) templateTypes=\(preparation.sourceTemplates.map { $0.orbType.rawValue }) outcome=\(outcome) requestedSizes=\(preparation.decision.requestedSizes) plannedSizes=\(preparation.plannedSizes)")
+                assert(!plannerRanOnMainThread)
 #endif
                 self.commitRefillAndContinue(refillSlots: refillSlots,
                     expectedRefillCount: expectedRefillCount, resolveID: resolveID,
@@ -1012,21 +1081,23 @@ final class GameScene: SKScene {
 
 #if DEBUG
         if isControlledSkyfallRefill {
-            print("[SKYFALL] controlled batch begin progress=\(skyfallController.generatedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
+            gameplayVerboseLog("[SKYFALL] controlled batch begin progress=\(skyfallController.generatedCombos)/\(skyfallController.requestedCombos) slots=\(refillSlots.count)")
         } else if isFriendlyNaturalRefill {
-            print("[SKYFALL] friendly natural begin next=\(skyfallController.generatedCombos + 1) slots=\(refillSlots.count)")
+            gameplayVerboseLog("[SKYFALL] friendly natural begin next=\(skyfallController.generatedCombos + 1) slots=\(refillSlots.count)")
         } else {
-            print("[REFILL] safe final begin slots=\(refillSlots.count)")
+            gameplayVerboseLog("[REFILL] safe final begin slots=\(refillSlots.count)")
         }
-        friendlyPreparation?.logDebug(resolveID: resolveID)
-        friendlyDebugPreparation = friendlyPreparation
-        friendlyDebugDetectedGroups = nil
-        if let friendlyPreparation {
-            friendlyDebugStatistics[friendlyPreparation.slots.count, default: FriendlyRefillDebugStatistics()]
-                .record(friendlyPreparation)
-            if friendlyPreparation.decision.selectedTarget > 0 {
-                friendlyTargetStatistics[friendlyPreparation.decision.selectedTarget, default: FriendlyTargetDebugStatistics()]
+        if gameplayVerboseLoggingEnabled {
+            friendlyPreparation?.logDebug(resolveID: resolveID)
+            friendlyDebugPreparation = friendlyPreparation
+            friendlyDebugDetectedGroups = nil
+            if let friendlyPreparation {
+                friendlyDebugStatistics[friendlyPreparation.slots.count, default: FriendlyRefillDebugStatistics()]
                     .record(friendlyPreparation)
+                if friendlyPreparation.decision.selectedTarget > 0 {
+                    friendlyTargetStatistics[friendlyPreparation.decision.selectedTarget, default: FriendlyTargetDebugStatistics()]
+                        .record(friendlyPreparation)
+                }
             }
         }
 #endif
@@ -1062,10 +1133,12 @@ final class GameScene: SKScene {
         let refillMode = isControlledSkyfallRefill
             ? "controlled"
             : (friendlyPreparation?.refillMode ?? "safe")
-        let typeSummary = OrbType.allCases.map { type in
-            "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
-        }.joined(separator: " ")
-        print("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) assignmentCount=\(plannedTypes.count) \(typeSummary)")
+        if gameplayVerboseLoggingEnabled {
+            let typeSummary = OrbType.allCases.map { type in
+                "\(type.displayName)=\(plannedTypes.filter { $0 == type }.count)"
+            }.joined(separator: " ")
+            gameplayVerboseLog("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) assignmentCount=\(plannedTypes.count) \(typeSummary)")
+        }
 #endif
 
         let preservedCount = orbNodes.count
@@ -1079,6 +1152,10 @@ final class GameScene: SKScene {
                 self?.point(for: position) ?? .zero
             },
             friendlyPreparation: friendlyPreparation,
+            nodeProvider: { [weak self] orb, diameter in
+                self?.dequeueOrbNode(for: orb, diameter: diameter)
+                    ?? OrbNode(orb: orb, diameter: diameter)
+            },
             completion: { [weak self] completed in
                 self?.refillAnimationDidComplete(result: completed, resolveID: resolveID,
                     friendlyPreparation: friendlyPreparation,
@@ -1098,17 +1175,19 @@ final class GameScene: SKScene {
         let emptyAfter = grid.emptyPositions().count
         let occupiedAfter = grid.cells.flatMap { $0 }.compactMap { $0 }.count
         let selectedTargetDescription = friendlyDecision.map { String($0.selectedTarget) } ?? "n/a"
-        print("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) removedOrbs=\(expectedRefillCount) emptyBefore=\(refillSlots.count) selectedTarget=\(selectedTargetDescription) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
+        gameplayVerboseLog("[REFILL] resolveID=\(resolveID) refillMode=\(refillMode) slotCount=\(refillSlots.count) removedOrbs=\(expectedRefillCount) emptyBefore=\(refillSlots.count) selectedTarget=\(selectedTargetDescription) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
         if plannedTypes.count != refillSlots.count
             || result.spawns.count != refillSlots.count
             || emptyAfter != 0
             || occupiedAfter != grid.rows * grid.columns {
             print("[REFILL][ERROR] assignmentCount mismatch emptyBefore=\(refillSlots.count) assignmentCount=\(plannedTypes.count) spawnCount=\(result.spawns.count) emptyAfter=\(emptyAfter) occupiedAfter=\(occupiedAfter)")
         }
-        print("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
-        let starts = result.descriptors.map(\.start.y)
-        let ends = result.descriptors.map(\.end.y)
-        print("[REFILL_ANIMATION] newNodes=\(result.nodes.count) start=\(starts.min() ?? 0)...\(starts.max() ?? 0) end=\(ends.min() ?? 0)...\(ends.max() ?? 0) durationMs=\(result.duration * 1_000) actionsScheduled=\(result.nodes.allSatisfy { $0.action(forKey: RefillController.fallActionKey) != nil })")
+        gameplayVerboseLog("[SKYFALL] removed=\(expectedRefillCount) existingPreserved=\(preservedCount) newOrbs=\(result.spawns.count)")
+        if gameplayVerboseLoggingEnabled {
+            let starts = result.descriptors.map(\.start.y)
+            let ends = result.descriptors.map(\.end.y)
+            gameplayVerboseLog("[REFILL_ANIMATION] newNodes=\(result.nodes.count) start=\(starts.min() ?? 0)...\(starts.max() ?? 0) end=\(ends.min() ?? 0)...\(ends.max() ?? 0) durationMs=\(result.duration * 1_000) actionsScheduled=\(result.nodes.allSatisfy { $0.action(forKey: RefillController.fallActionKey) != nil })")
+        }
 #endif
     }
 
@@ -1127,22 +1206,27 @@ final class GameScene: SKScene {
             return
         }
 #if DEBUG
-        print("[CASCADE] refillAnimationComplete=true beforeNextResolve=true resolveID=\(resolveID)")
+        gameplayVerboseLog("[CASCADE] refillAnimationComplete=true beforeNextResolve=true resolveID=\(resolveID)")
 #endif
+        let matchStarted = GamePerformanceProfiler.timestamp
         let stableBoard = friendlyPreparation != nil
             ? FriendlyRefillPipeline.scan(in: grid)
             : StableBoardScan(matches: matchDetector.detect(in: grid))
+        GamePerformanceProfiler.shared.recordRemove(
+            matchMs: (GamePerformanceProfiler.timestamp - matchStarted) * 1_000)
         let matches = stableBoard.matches
         let cascadeResolution = FriendlyRefillPipeline.cascadeResolution(from: stableBoard)
 #if DEBUG
-        print("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
-        let newPositions = Set(result.spawns.map(\.destination))
-        let compositions = matches.map { match in
-            let newCount = match.positions.intersection(newPositions).count
-            return "\(match.type.rawValue):size=\(match.matchSize):new=\(newCount):preserved=\(match.matchSize - newCount)"
+        gameplayVerboseLog("[POST_REFILL_MATCH] resolveID=\(resolveID) detectedGroupCount=\(matches.count) groupSizes=\(matches.map { $0.positions.count }) groupTypes=\(matches.map { $0.type.rawValue }) refillMode=\(friendlyPreparation?.refillMode ?? (isControlledSkyfallRefill ? "controlled" : "safe"))")
+        if gameplayVerboseLoggingEnabled {
+            let newPositions = Set(result.spawns.map(\.destination))
+            let compositions = matches.map { match in
+                let newCount = match.positions.intersection(newPositions).count
+                return "\(match.type.rawValue):size=\(match.matchSize):new=\(newCount):preserved=\(match.matchSize - newCount)"
+            }
+            gameplayVerboseLog("[CASCADE_MATCH] resolveID=\(resolveID) groups=\(compositions)")
         }
-        print("[CASCADE_MATCH] resolveID=\(resolveID) groups=\(compositions)")
-        if friendlyPreparation != nil {
+        if gameplayVerboseLoggingEnabled, friendlyPreparation != nil {
             friendlyDebugDetectedGroups = matches.count
             if let preparation = friendlyPreparation {
                 friendlyDebugStatistics[preparation.slots.count, default: FriendlyRefillDebugStatistics()]
@@ -1152,10 +1236,10 @@ final class GameScene: SKScene {
                     friendlyTargetStatistics[target, default: FriendlyTargetDebugStatistics()]
                         .recordPostRefill(matches, preparation: preparation)
                     let targetStats = friendlyTargetStatistics[target] ?? FriendlyTargetDebugStatistics()
-                    print("[FRIENDLY_TARGET_STATS] selected=\(target) attempts=\(targetStats.attempts) plannedExact=\(targetStats.plannedExact) detectedExactOrMore=\(targetStats.detectedExactOrMore)")
+                    gameplayVerboseLog("[FRIENDLY_TARGET_STATS] selected=\(target) attempts=\(targetStats.attempts) plannedExact=\(targetStats.plannedExact) detectedExactOrMore=\(targetStats.detectedExactOrMore)")
                 }
                 let stats = friendlyDebugStatistics[preparation.slots.count] ?? FriendlyRefillDebugStatistics()
-                print("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
+                gameplayVerboseLog("[FRIENDLY_STATS] slots=\(preparation.slots.count) eligible=\(stats.eligible) target=\(stats.targets) plan=\(stats.plans) detected=\(stats.detected)")
             }
         }
 #endif
@@ -1176,15 +1260,15 @@ final class GameScene: SKScene {
             let source = isControlledSkyfallRefill
                 ? "controlled"
                 : (isFriendlyNaturalRefill ? "friendly-natural" : "natural")
-            print("[SKYFALL] \(source) groups=\(matches.count) total=\(skyfallController.generatedCombos) target=\(skyfallController.requestedCombos)")
+            gameplayVerboseLog("[SKYFALL] \(source) groups=\(matches.count) total=\(skyfallController.generatedCombos) target=\(skyfallController.requestedCombos)")
 #endif
         }
 #if DEBUG
         if friendlyDecision != nil {
-            print("[FRIENDLY_REFILL] actualDetected=\(matches.count)")
+            gameplayVerboseLog("[FRIENDLY_REFILL] actualDetected=\(matches.count)")
         }
         if isSafeRefill {
-            print("[NATURAL] detected groups=\(matches.count) cumulative=\(skyfallController.generatedCombos)")
+            gameplayVerboseLog("[NATURAL] detected groups=\(matches.count) cumulative=\(skyfallController.generatedCombos)")
         }
 #endif
 
@@ -1195,13 +1279,13 @@ final class GameScene: SKScene {
             let source = isControlledSkyfallRefill
                 ? "controlled"
                 : (isFriendlyNaturalRefill ? "friendly" : "natural")
-            print("[CASCADE] resolveID=\(resolveID) source=\(source) action=resolve actualSizes=\(cascadeResolution.matches.map(\.matchSize)) nextTemplateSource=actualNormalizedGroups")
+            gameplayVerboseLog("[CASCADE] resolveID=\(resolveID) source=\(source) action=resolve actualSizes=\(cascadeResolution.matches.map(\.matchSize)) nextTemplateSource=actualNormalizedGroups")
 #endif
             process(result: cascadeResolution, source: .skyfall, resolveID: resolveID)
             return
         }
 #if DEBUG
-        print("[CASCADE] resolveID=\(resolveID) action=stable reason=no-normalized-match")
+        gameplayVerboseLog("[CASCADE] resolveID=\(resolveID) action=stable reason=no-normalized-match")
 #endif
 
         if isControlledSkyfallRefill || isFriendlyNaturalRefill {
@@ -1336,10 +1420,13 @@ final class GameScene: SKScene {
     }
 
     override func update(_ currentTime: TimeInterval) {
+        let updateStarted = GamePerformanceProfiler.timestamp
+        var frameIntervalMs = 0.0
 #if DEBUG
         if lastUpdateTime > 0 {
             let delta = max(currentTime - lastUpdateTime, 0.000_1)
             smoothedFPS = smoothedFPS * 0.9 + (1 / delta) * 0.1
+            frameIntervalMs = delta * 1_000
         }
 #endif
         lastUpdateTime = currentTime
@@ -1348,15 +1435,29 @@ final class GameScene: SKScene {
         }
         updateTimerUI()
         updateDebugOverlay()
+        if frameIntervalMs > 0 {
+            GamePerformanceProfiler.shared.recordFrame(
+                intervalMs: frameIntervalMs,
+                mainThreadWorkMs: (GamePerformanceProfiler.timestamp - updateStarted) * 1_000)
+        }
     }
 
     private func updateTimerUI() {
         let remaining = turnController.remainingTime
-        timerLabel.text = String(format: "Turn Time  %.1fs", remaining)
+        let tenths = Int((remaining * 10).rounded())
+        if lastTimerTenths != tenths {
+            lastTimerTenths = tenths
+            timerLabel.text = String(format: "Turn Time  %.1fs", remaining)
+        }
         let availableWidth = max(boardFrame.width, 0)
         timerFill.size.width = availableWidth * CGFloat(turnController.progress)
         let ratio = turnController.progress
-        timerFill.color = ratio > 0.5 ? .systemGreen : (ratio > 0.2 ? .systemOrange : .systemRed)
+        let colorBand = ratio > 0.5 ? 2 : (ratio > 0.2 ? 1 : 0)
+        if lastTimerColorBand != colorBand {
+            lastTimerColorBand = colorBand
+            timerFill.color = colorBand == 2 ? .systemGreen
+                : (colorBand == 1 ? .systemOrange : .systemRed)
+        }
     }
 
     private func resetComboDisplay() {
@@ -1365,36 +1466,56 @@ final class GameScene: SKScene {
         comboLabel.text = "Combo 0"
         comboLabel.alpha = 1
         comboLabel.setScale(1)
-        updateDebugOverlay()
+        updateDebugOverlay(force: true)
     }
 
 
 
-    private func updateDebugOverlay() {
+    private func updateDebugOverlay(force: Bool = false) {
 #if DEBUG
         guard debugLabels.count == 6,
               orbTypeDebugLabels.count == OrbType.resolveOrder.count else { return }
-        debugLabels[0].text = String(format: "FPS %.0f", smoothedFPS)
-        debugLabels[1].text = "State \(gameState.rawValue)"
-        debugLabels[2].text = GameplayStatusHUDText.game(
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - lastDebugHUDUpdate >= 0.10 else { return }
+        lastDebugHUDUpdate = now
+        let nextDebugText = [
+            String(format: "FPS %.0f", smoothedFPS),
+            "State \(gameState.rawValue)",
+            GameplayStatusHUDText.game(
             completedTurnCount: sessionStatistics.completedTurnCount
-        )
-        debugLabels[3].text = GameplayStatusHUDText.time(
+            ),
+            GameplayStatusHUDText.time(
             current: turnController.displayedElapsedTurnTime,
             average: sessionStatistics.averageTurnTime
-        )
-        debugLabels[4].text = GameplayStatusHUDText.combo(
+            ),
+            GameplayStatusHUDText.combo(
             currentBreakdown: comboController.breakdownText,
             averageManual: sessionStatistics.averageManualCombo,
             averageSkyfall: sessionStatistics.averageSkyfallCombo
-        )
-        debugLabels[5].text = noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
-        for (index, type) in OrbType.resolveOrder.enumerated() {
-            orbTypeDebugLabels[index].text = GameplayStatusHUDText.orbType(
+            ),
+            noResolveDuringTurn ? "No Resolve ON" : "No Resolve OFF"
+        ]
+        for index in nextDebugText.indices {
+            if !cachedDebugText.indices.contains(index)
+                || cachedDebugText[index] != nextDebugText[index] {
+                debugLabels[index].text = nextDebugText[index]
+            }
+        }
+        cachedDebugText = nextDebugText
+
+        let nextOrbText = OrbType.resolveOrder.map { type in
+            GameplayStatusHUDText.orbType(
                 currentBreakdown: comboController.breakdownText(for: type),
                 average: sessionStatistics.averageCombo(for: type)
             )
         }
+        for index in nextOrbText.indices {
+            if !cachedOrbDebugText.indices.contains(index)
+                || cachedOrbDebugText[index] != nextOrbText[index] {
+                orbTypeDebugLabels[index].text = nextOrbText[index]
+            }
+        }
+        cachedOrbDebugText = nextOrbText
 #endif
     }
 }
