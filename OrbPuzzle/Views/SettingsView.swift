@@ -77,7 +77,9 @@ struct SettingsView: View {
 
         Section("Turn Resolution") {
             Toggle("No Resolve During Turn", isOn: $noResolveDuringTurn)
-            Text("After a valid drag, finger-up always keeps the board and timer active. Tap the board to resolve early, or wait for zero. This stored setting no longer restores finger-up resolution.")
+            Text(noResolveDuringTurn
+                 ? "Finger-up keeps the board and timer active. Tap the board to resolve early, or wait for zero."
+                 : "Finger-up resolves immediately after the first valid move.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }

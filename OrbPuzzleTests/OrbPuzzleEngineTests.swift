@@ -2330,18 +2330,26 @@ final class OrbPuzzleEngineTests: XCTestCase {
         )
     }
 
-    func testTurnReleaseAlwaysWaitsForSeparateTapAfterAValidSwap() {
-        for legacyNoResolveSetting in [false, true] {
-            XCTAssertEqual(
-                TurnInteractionPolicy.stateAfterGestureEnd(
-                    hasValidSwap: true,
-                    legacyNoResolveDuringTurn: legacyNoResolveSetting
-                ),
-                .awaitingResolveTap
-            )
-        }
+    func testTurnReleaseRespectsNoResolveSetting() {
         XCTAssertEqual(
-            TurnInteractionPolicy.stateAfterGestureEnd(hasValidSwap: false),
+            TurnInteractionPolicy.actionAfterGestureEnd(
+                hasValidSwap: true,
+                noResolveDuringTurn: false
+            ),
+            .resolveImmediately
+        )
+        XCTAssertEqual(
+            TurnInteractionPolicy.actionAfterGestureEnd(
+                hasValidSwap: true,
+                noResolveDuringTurn: true
+            ),
+            .awaitResolveTap
+        )
+        XCTAssertEqual(
+            TurnInteractionPolicy.actionAfterGestureEnd(
+                hasValidSwap: false,
+                noResolveDuringTurn: true
+            ),
             .idle
         )
         XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromBoardTap(
@@ -2350,6 +2358,33 @@ final class OrbPuzzleEngineTests: XCTestCase {
             state: .resolving, isValidTap: true))
         XCTAssertTrue(TurnInteractionPolicy.shouldResolveFromBoardTap(
             state: .awaitingResolveTap, isValidTap: true))
+    }
+
+    func testNoResolveAndSkyfallBonusFourModeMatrix() {
+        let cases: [(noResolve: Bool, bonus: Bool,
+                     release: TurnGestureEndAction, refill: SkyfallRefillMode)] = [
+            (false, false, .resolveImmediately, .naturalRandom),
+            (false, true, .resolveImmediately, .friendlyBonus),
+            (true, false, .awaitResolveTap, .naturalRandom),
+            (true, true, .awaitResolveTap, .friendlyBonus)
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                TurnInteractionPolicy.actionAfterGestureEnd(
+                    hasValidSwap: true,
+                    noResolveDuringTurn: testCase.noResolve
+                ),
+                testCase.release
+            )
+            XCTAssertEqual(
+                SkyfallBonusPolicy.refillMode(
+                    hasControlledTarget: false,
+                    bonusEnabled: testCase.bonus
+                ),
+                testCase.refill
+            )
+        }
     }
 
     func testResolveTapGateAcceptsOnlyASeparateQuickStationaryBoardTap() {
@@ -2407,8 +2442,11 @@ final class OrbPuzzleEngineTests: XCTestCase {
             timer.endGesture()
 
             XCTAssertEqual(
-                TurnInteractionPolicy.stateAfterGestureEnd(hasValidSwap: timer.isTiming),
-                .awaitingResolveTap
+                TurnInteractionPolicy.actionAfterGestureEnd(
+                    hasValidSwap: timer.isTiming,
+                    noResolveDuringTurn: true
+                ),
+                .awaitResolveTap
             )
             XCTAssertFalse(timer.update(at: 100 + duration - 0.1))
             XCTAssertEqual(timer.remainingTime, 0.1, accuracy: 0.001)

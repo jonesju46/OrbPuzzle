@@ -15,12 +15,19 @@ enum GameState: String, Equatable {
     case completed
 }
 
+enum TurnGestureEndAction: Equatable {
+    case idle
+    case awaitResolveTap
+    case resolveImmediately
+}
+
 enum TurnInteractionPolicy {
-    static func stateAfterGestureEnd(
+    static func actionAfterGestureEnd(
         hasValidSwap: Bool,
-        legacyNoResolveDuringTurn _: Bool = false
-    ) -> GameState {
-        hasValidSwap ? .awaitingResolveTap : .idle
+        noResolveDuringTurn: Bool
+    ) -> TurnGestureEndAction {
+        guard hasValidSwap else { return .idle }
+        return noResolveDuringTurn ? .awaitResolveTap : .resolveImmediately
     }
 
     static func shouldResolveFromBoardTap(state: GameState, isValidTap: Bool) -> Bool {

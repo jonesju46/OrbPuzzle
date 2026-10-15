@@ -844,13 +844,20 @@ final class GameScene: SKScene {
         }
         turnController.endGesture()
         updateTimerUI()
-        // V5.4 always waits for a separate board tap after a real swap. The
-        // persisted legacy setting remains visible but cannot restore the old
-        // finger-up resolve path.
-        gameState = TurnInteractionPolicy.stateAfterGestureEnd(
+        switch TurnInteractionPolicy.actionAfterGestureEnd(
             hasValidSwap: turnController.isTiming,
-            legacyNoResolveDuringTurn: noResolveDuringTurn
-        )
+            noResolveDuringTurn: noResolveDuringTurn
+        ) {
+        case .idle:
+            gameState = .idle
+        case .awaitResolveTap:
+            // No Resolve ON keeps the board and timer live until a separate
+            // board tap or timer expiry enters the shared resolve gate.
+            gameState = .awaitingResolveTap
+        case .resolveImmediately:
+            // No Resolve OFF preserves the original finger-up behavior.
+            finishTurnSession(timerExpired: false)
+        }
     }
 
     private func finishTurnSession(timerExpired: Bool) {
