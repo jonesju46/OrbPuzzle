@@ -2343,7 +2343,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                 hasValidSwap: true,
                 noResolveDuringTurn: true
             ),
-            .awaitResolveTap
+            .continueTurn
         )
         XCTAssertEqual(
             TurnInteractionPolicy.actionAfterGestureEnd(
@@ -2352,12 +2352,6 @@ final class OrbPuzzleEngineTests: XCTestCase {
             ),
             .idle
         )
-        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromBoardTap(
-            state: .idle, isValidTap: true))
-        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromBoardTap(
-            state: .resolving, isValidTap: true))
-        XCTAssertTrue(TurnInteractionPolicy.shouldResolveFromBoardTap(
-            state: .awaitingResolveTap, isValidTap: true))
     }
 
     func testNoResolveAndSkyfallBonusFourModeMatrix() {
@@ -2365,8 +2359,8 @@ final class OrbPuzzleEngineTests: XCTestCase {
                      release: TurnGestureEndAction, refill: SkyfallRefillMode)] = [
             (false, false, .resolveImmediately, .naturalRandom),
             (false, true, .resolveImmediately, .friendlyBonus),
-            (true, false, .awaitResolveTap, .naturalRandom),
-            (true, true, .awaitResolveTap, .friendlyBonus)
+            (true, false, .continueTurn, .naturalRandom),
+            (true, true, .continueTurn, .friendlyBonus)
         ]
 
         for testCase in cases {
@@ -2399,6 +2393,26 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertFalse(gate.isTracking)
     }
 
+    func testResolveTapIsEnabledOnlyDuringAnActiveNoResolveTurn() {
+        XCTAssertTrue(TurnInteractionPolicy.shouldTrackResolveTap(
+            noResolveDuringTurn: true, isTiming: true, isTurnActive: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldTrackResolveTap(
+            noResolveDuringTurn: false, isTiming: true, isTurnActive: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldTrackResolveTap(
+            noResolveDuringTurn: true, isTiming: false, isTurnActive: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldTrackResolveTap(
+            noResolveDuringTurn: true, isTiming: true, isTurnActive: false))
+
+        XCTAssertTrue(TurnInteractionPolicy.shouldResolveFromTap(
+            noResolveDuringTurn: true, isTiming: true, isValidTap: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromTap(
+            noResolveDuringTurn: false, isTiming: true, isValidTap: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromTap(
+            noResolveDuringTurn: true, isTiming: false, isValidTap: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromTap(
+            noResolveDuringTurn: true, isTiming: true, isValidTap: false))
+    }
+
     func testResolveTapGateRejectsDragLongPressOutsideAndMultiTouch() {
         var gate = ResolveTapGate()
         let point = CGPoint(x: 100, y: 100)
@@ -2422,6 +2436,29 @@ final class OrbPuzzleEngineTests: XCTestCase {
             at: point, timestamp: 4, touchCount: 2, isInsideBoard: true))
     }
 
+    func testResolveTapGateRejectsDragThatReturnsToItsStartingPoint() {
+        var gate = ResolveTapGate()
+        let start = CGPoint(x: 100, y: 100)
+
+        XCTAssertTrue(gate.begin(
+            at: start, timestamp: 1, touchCount: 1, isInsideBoard: true))
+        gate.move(to: CGPoint(x: 140, y: 100), touchCount: 1)
+        gate.move(to: start, touchCount: 1)
+        XCTAssertFalse(gate.end(
+            at: start, timestamp: 1.2, touchCount: 1, isInsideBoard: true))
+    }
+
+    func testAnySuccessfulSwapInvalidatesResolveTapCandidate() {
+        var gate = ResolveTapGate()
+        let point = CGPoint(x: 100, y: 100)
+
+        XCTAssertTrue(gate.begin(
+            at: point, timestamp: 1, touchCount: 1, isInsideBoard: true))
+        gate.invalidate()
+        XCTAssertFalse(gate.end(
+            at: point, timestamp: 1.1, touchCount: 1, isInsideBoard: true))
+    }
+
     func testTapAndTimerShareAnExactlyOnceResolveGate() {
         var gate = EndTurnResolveGate()
         XCTAssertTrue(gate.begin())
@@ -2430,7 +2467,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertTrue(gate.begin())
     }
 
-    func testAwaitingResolveTapKeepsFiveAndNinetyNineSecondTimersRunning() {
+    func testNoResolveFingerUpKeepsFiveAndNinetyNineSecondTimersRunning() {
         for duration in [5.0, 99.0] {
             let timer = TurnController(duration: duration)
             timer.select(
@@ -2446,7 +2483,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
                     hasValidSwap: timer.isTiming,
                     noResolveDuringTurn: true
                 ),
-                .awaitResolveTap
+                .continueTurn
             )
             XCTAssertFalse(timer.update(at: 100 + duration - 0.1))
             XCTAssertEqual(timer.remainingTime, 0.1, accuracy: 0.001)
@@ -2455,6 +2492,40 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertFalse(timer.isTiming)
             XCTAssertEqual(timer.remainingTime, 0, accuracy: 0.001)
         }
+    }
+
+    func testNoResolveAllowsMultipleDragGesturesInOneTimedTurn() {
+        let timer = TurnController(duration: 30)
+        timer.select(
+            orbID: UUID(),
+            at: GridPosition(row: 0, column: 0),
+            touchPosition: .zero
+        )
+        timer.beginTiming(at: 100)
+        timer.endGesture()
+        XCTAssertEqual(
+            TurnInteractionPolicy.actionAfterGestureEnd(
+                hasValidSwap: timer.isTiming,
+                noResolveDuringTurn: true
+            ),
+            .continueTurn
+        )
+
+        timer.select(
+            orbID: UUID(),
+            at: GridPosition(row: 4, column: 5),
+            touchPosition: CGPoint(x: 300, y: 400)
+        )
+        XCTAssertTrue(timer.hasActiveGesture)
+        XCTAssertTrue(timer.isTiming)
+        timer.endGesture()
+        XCTAssertEqual(
+            TurnInteractionPolicy.actionAfterGestureEnd(
+                hasValidSwap: timer.isTiming,
+                noResolveDuringTurn: true
+            ),
+            .continueTurn
+        )
     }
 
     func testNewGameResetCancelsPendingResolveTap() {

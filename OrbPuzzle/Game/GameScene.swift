@@ -668,13 +668,23 @@ final class GameScene: SKScene {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if gameState == .awaitingResolveTap {
-            beginResolveTap(touches, event: event)
-            return
-        }
+        // A second finger invalidates a pending tap without changing the
+        // original drag-selection behavior.
+        if resolveTapGate.isTracking { resolveTapGate.invalidate() }
         guard battleSession.state.canAcceptInput,
               gameState == .idle || gameState == .turnActive,
               let touch = touches.first else { return }
+        let shouldTrackResolveTap = TurnInteractionPolicy.shouldTrackResolveTap(
+            noResolveDuringTurn: noResolveDuringTurn,
+            isTiming: turnController.isTiming,
+            isTurnActive: gameState == .turnActive
+        )
+        if shouldTrackResolveTap {
+            beginResolveTap(touches, event: event)
+        } else {
+            resolveTapGate.cancel()
+            resolveTapTouch = nil
+        }
         let location = touch.location(in: self)
         guard let position = gridPosition(at: location), let orb = grid.orb(at: position), let node = orbNodes[orb.id] else { return }
         gameState = .selected
@@ -687,9 +697,8 @@ final class GameScene: SKScene {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if gameState == .awaitingResolveTap {
+        if resolveTapGate.isTracking {
             moveResolveTap(touches, event: event)
-            return
         }
         let touchStarted = GamePerformanceProfiler.timestamp
         guard gameState == .selected || gameState == .dragging,
@@ -722,6 +731,9 @@ final class GameScene: SKScene {
                   current.isAdjacent(to: destination),
                   let displacedOrb = grid.orb(at: destination),
                   grid.swap(current, destination) else { continue }
+            // Once any swap occurs, this touch remains a drag even if it later
+            // returns to its starting point.
+            resolveTapGate.invalidate()
             swapMs += (GamePerformanceProfiler.timestamp - swapStarted) * 1_000
             if GlassSwapSoundPolicy.shouldRequestPlayback(
                 didSwap: true,
@@ -750,19 +762,13 @@ final class GameScene: SKScene {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if gameState == .awaitingResolveTap {
-            endResolveTap(touches)
-            return
-        }
-        endGesture(cancelled: false)
+        let shouldResolveFromTap = endResolveTap(touches)
+        endGesture(cancelled: false, shouldResolveFromTap: shouldResolveFromTap)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        if gameState == .awaitingResolveTap {
-            resolveTapGate.cancel()
-            resolveTapTouch = nil
-            return
-        }
+        resolveTapGate.cancel()
+        resolveTapTouch = nil
         endGesture(cancelled: true)
     }
 
@@ -804,12 +810,12 @@ final class GameScene: SKScene {
         )
     }
 
-    private func endResolveTap(_ touches: Set<UITouch>) {
+    private func endResolveTap(_ touches: Set<UITouch>) -> Bool {
         guard let trackedTouch = resolveTapTouch,
               let touch = touches.first(where: { $0 === trackedTouch }) else {
             resolveTapGate.cancel()
             resolveTapTouch = nil
-            return
+            return false
         }
         let location = touch.location(in: self)
         let isValidTap = resolveTapGate.end(
@@ -819,14 +825,14 @@ final class GameScene: SKScene {
             isInsideBoard: boardFrame.contains(location)
         )
         resolveTapTouch = nil
-        guard TurnInteractionPolicy.shouldResolveFromBoardTap(
-            state: gameState,
+        return TurnInteractionPolicy.shouldResolveFromTap(
+            noResolveDuringTurn: noResolveDuringTurn,
+            isTiming: turnController.isTiming,
             isValidTap: isValidTap
-        ) else { return }
-        finishTurnSession(timerExpired: false)
+        )
     }
 
-    private func endGesture(cancelled: Bool) {
+    private func endGesture(cancelled: Bool, shouldResolveFromTap: Bool = false) {
         guard gameState == .selected || gameState == .dragging else { return }
 #if DEBUG
         if let position = turnController.currentPosition {
@@ -844,16 +850,20 @@ final class GameScene: SKScene {
         }
         turnController.endGesture()
         updateTimerUI()
+        if shouldResolveFromTap {
+            finishTurnSession(timerExpired: false)
+            return
+        }
         switch TurnInteractionPolicy.actionAfterGestureEnd(
             hasValidSwap: turnController.isTiming,
             noResolveDuringTurn: noResolveDuringTurn
         ) {
         case .idle:
             gameState = .idle
-        case .awaitResolveTap:
-            // No Resolve ON keeps the board and timer live until a separate
-            // board tap or timer expiry enters the shared resolve gate.
-            gameState = .awaitingResolveTap
+        case .continueTurn:
+            // Restore the original No Resolve behavior: finger-up ends only
+            // this drag and the player may immediately begin another one.
+            gameState = .turnActive
         case .resolveImmediately:
             // No Resolve OFF preserves the original finger-up behavior.
             finishTurnSession(timerExpired: false)

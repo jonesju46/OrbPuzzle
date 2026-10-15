@@ -6,7 +6,6 @@ enum GameState: String, Equatable {
     case selected
     case turnActive
     case dragging
-    case awaitingResolveTap
     case resolving
     case removing
     case falling
@@ -17,7 +16,7 @@ enum GameState: String, Equatable {
 
 enum TurnGestureEndAction: Equatable {
     case idle
-    case awaitResolveTap
+    case continueTurn
     case resolveImmediately
 }
 
@@ -27,16 +26,28 @@ enum TurnInteractionPolicy {
         noResolveDuringTurn: Bool
     ) -> TurnGestureEndAction {
         guard hasValidSwap else { return .idle }
-        return noResolveDuringTurn ? .awaitResolveTap : .resolveImmediately
+        return noResolveDuringTurn ? .continueTurn : .resolveImmediately
     }
 
-    static func shouldResolveFromBoardTap(state: GameState, isValidTap: Bool) -> Bool {
-        state == .awaitingResolveTap && isValidTap
+    static func shouldTrackResolveTap(
+        noResolveDuringTurn: Bool,
+        isTiming: Bool,
+        isTurnActive: Bool
+    ) -> Bool {
+        noResolveDuringTurn && isTiming && isTurnActive
+    }
+
+    static func shouldResolveFromTap(
+        noResolveDuringTurn: Bool,
+        isTiming: Bool,
+        isValidTap: Bool
+    ) -> Bool {
+        noResolveDuringTurn && isTiming && isValidTap
     }
 }
 
-/// Recognizes the separate, single-finger board tap that ends a moved turn.
-/// It deliberately rejects long presses, drags and multi-touch sequences.
+/// Recognizes a single-finger board tap without changing the existing drag path.
+/// Long presses, drags, swaps and multi-touch sequences invalidate the candidate.
 struct ResolveTapGate: Equatable {
     static let maximumMovement: CGFloat = 12
     static let maximumDuration: TimeInterval = 0.35
