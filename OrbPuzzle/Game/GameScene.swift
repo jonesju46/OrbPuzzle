@@ -79,6 +79,7 @@ final class GameScene: SKScene {
         }
     }
     private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
+    private var skyfallBonusEnabled = GameSettings.defaultSkyfallBonusEnabled
     private var requestedSkyfallCombos = GameSettings.effectiveSkyfallComboCount(
         enabled: GameSettings.defaultSkyfallComboEnabled,
         configured: GameSettings.defaultSkyfallComboCount
@@ -86,7 +87,9 @@ final class GameScene: SKScene {
     private var lastUpdateTime: TimeInterval = 0
     private var lastTimerTenths: Int?
     private var lastTimerColorBand: Int?
-    private var forcedEndInProgress = false
+    private var endTurnResolveGate = EndTurnResolveGate()
+    private var resolveTapGate = ResolveTapGate()
+    private var resolveTapTouch: UITouch?
     private var gameSessionFence = GameSessionFence()
     private var resolveGeneration: UInt = 0
     private var activeResolveID: UInt = 0
@@ -104,10 +107,16 @@ final class GameScene: SKScene {
     @available(*, unavailable)
     required init?(coder aDecoder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(turnDuration: Double, noResolveDuringTurn: Bool, skyfallComboCount: Int) {
+    func configure(
+        turnDuration: Double,
+        noResolveDuringTurn: Bool,
+        skyfallComboCount: Int,
+        skyfallBonusEnabled: Bool = GameSettings.defaultSkyfallBonusEnabled
+    ) {
         turnController.duration = turnDuration
         self.noResolveDuringTurn = noResolveDuringTurn
         requestedSkyfallCombos = min(max(skyfallComboCount, 0), 99)
+        self.skyfallBonusEnabled = skyfallBonusEnabled
         updateDebugOverlay(force: true)
     }
 
@@ -119,6 +128,7 @@ final class GameScene: SKScene {
             comboCount: comboController.comboCount,
             generatedSkyfall: skyfallController.generatedCombos,
             requestedSkyfall: requestedSkyfallCombos,
+            skyfallBonusEnabled: skyfallBonusEnabled,
             remainingTime: turnController.remainingTime,
             progress: turnController.progress,
             resolveID: activeResolveID,
@@ -158,7 +168,9 @@ final class GameScene: SKScene {
         }
         orbNodes.removeAll(keepingCapacity: true)
 
-        forcedEndInProgress = false
+        endTurnResolveGate.reset()
+        resolveTapGate.cancel()
+        resolveTapTouch = nil
         resolveLifecycle = ResolveLifecycle()
         comboController.reset()
         skyfallController.reset(requestedCombos: requestedSkyfallCombos)
@@ -656,6 +668,10 @@ final class GameScene: SKScene {
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if gameState == .awaitingResolveTap {
+            beginResolveTap(touches, event: event)
+            return
+        }
         guard battleSession.state.canAcceptInput,
               gameState == .idle || gameState == .turnActive,
               let touch = touches.first else { return }
@@ -671,6 +687,10 @@ final class GameScene: SKScene {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if gameState == .awaitingResolveTap {
+            moveResolveTap(touches, event: event)
+            return
+        }
         let touchStarted = GamePerformanceProfiler.timestamp
         guard gameState == .selected || gameState == .dragging,
               let touch = touches.first,
@@ -729,8 +749,82 @@ final class GameScene: SKScene {
             pathMs: pathMs, swapMs: swapMs, spriteMs: spriteMs, audioMs: audioMs)
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { endGesture(cancelled: false) }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { endGesture(cancelled: true) }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if gameState == .awaitingResolveTap {
+            endResolveTap(touches)
+            return
+        }
+        endGesture(cancelled: false)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if gameState == .awaitingResolveTap {
+            resolveTapGate.cancel()
+            resolveTapTouch = nil
+            return
+        }
+        endGesture(cancelled: true)
+    }
+
+    private func beginResolveTap(_ touches: Set<UITouch>, event: UIEvent?) {
+        let activeTouchCount = event?.allTouches?.filter {
+            $0.phase != .ended && $0.phase != .cancelled
+        }.count ?? touches.count
+        guard resolveTapTouch == nil,
+              touches.count == 1,
+              activeTouchCount == 1,
+              let touch = touches.first else {
+            resolveTapGate.cancel()
+            resolveTapTouch = nil
+            return
+        }
+        let location = touch.location(in: self)
+        if resolveTapGate.begin(
+            at: location,
+            timestamp: touch.timestamp,
+            touchCount: activeTouchCount,
+            isInsideBoard: boardFrame.contains(location)
+        ) {
+            resolveTapTouch = touch
+        }
+    }
+
+    private func moveResolveTap(_ touches: Set<UITouch>, event: UIEvent?) {
+        guard let trackedTouch = resolveTapTouch,
+              let touch = touches.first(where: { $0 === trackedTouch }) else {
+            resolveTapGate.invalidate()
+            return
+        }
+        let activeTouchCount = event?.allTouches?.filter {
+            $0.phase != .ended && $0.phase != .cancelled
+        }.count ?? touches.count
+        resolveTapGate.move(
+            to: touch.location(in: self),
+            touchCount: activeTouchCount
+        )
+    }
+
+    private func endResolveTap(_ touches: Set<UITouch>) {
+        guard let trackedTouch = resolveTapTouch,
+              let touch = touches.first(where: { $0 === trackedTouch }) else {
+            resolveTapGate.cancel()
+            resolveTapTouch = nil
+            return
+        }
+        let location = touch.location(in: self)
+        let isValidTap = resolveTapGate.end(
+            at: location,
+            timestamp: touch.timestamp,
+            touchCount: touches.count,
+            isInsideBoard: boardFrame.contains(location)
+        )
+        resolveTapTouch = nil
+        guard TurnInteractionPolicy.shouldResolveFromBoardTap(
+            state: gameState,
+            isValidTap: isValidTap
+        ) else { return }
+        finishTurnSession(timerExpired: false)
+    }
 
     private func endGesture(cancelled: Bool) {
         guard gameState == .selected || gameState == .dragging else { return }
@@ -750,19 +844,19 @@ final class GameScene: SKScene {
         }
         turnController.endGesture()
         updateTimerUI()
-        if noResolveDuringTurn, turnController.isTiming {
-            // Finger-up ends only this drag. The board and timer remain live until expiry.
-            gameState = .turnActive
-        } else if !turnController.isTiming {
-            gameState = .idle
-        } else {
-            finishTurnSession(timerExpired: false)
-        }
+        // V5.4 always waits for a separate board tap after a real swap. The
+        // persisted legacy setting remains visible but cannot restore the old
+        // finger-up resolve path.
+        gameState = TurnInteractionPolicy.stateAfterGestureEnd(
+            hasValidSwap: turnController.isTiming,
+            legacyNoResolveDuringTurn: noResolveDuringTurn
+        )
     }
 
     private func finishTurnSession(timerExpired: Bool) {
-        guard !forcedEndInProgress else { return }
-        forcedEndInProgress = true
+        guard endTurnResolveGate.begin() else { return }
+        resolveTapGate.cancel()
+        resolveTapTouch = nil
         gameState = .resolving
         if let id = turnController.selectedOrbID,
            let position = turnController.currentPosition,
@@ -994,17 +1088,32 @@ final class GameScene: SKScene {
             }
         }
 
-        // OFF-mode V4 planning can exceed a frame budget for a 30-slot refill.
+        let refillMode = SkyfallBonusPolicy.refillMode(
+            hasControlledTarget: skyfallController.hasControlledTarget,
+            bonusEnabled: skyfallBonusEnabled
+        )
+
+        // Friendly V4 planning can exceed a frame budget for a 30-slot refill.
         // Work only on an immutable type snapshot off the SpriteKit thread;
         // the live model and all nodes remain main-thread confined.
-        if !skyfallController.hasControlledTarget {
+        if refillMode == .friendlyBonus {
             prepareFriendlyRefillAsync(refillSlots: refillSlots,
                 expectedRefillCount: expectedRefillCount,
                 previousResolution: previousResolution, resolveID: resolveID)
             return
         }
 
-        // ON keeps its unchanged exact-total planner on the existing path.
+        // Bonus OFF bypasses both probability selection and template planning.
+        // The shared commit path supplies an unfiltered six-color random refill,
+        // then the normal full-board scan preserves every natural cascade.
+        if refillMode == .naturalRandom {
+            commitRefillAndContinue(refillSlots: refillSlots,
+                expectedRefillCount: expectedRefillCount, resolveID: resolveID,
+                controlledTypes: nil, friendlyPreparation: nil)
+            return
+        }
+
+        // Exact-target mode keeps its unchanged planner on the existing path.
         let controlledTypes = skyfallController.hasControlledTarget
             && skyfallController.needsAnotherCycle
             ? skyfallController.makeControlledRefill(grid: grid, refillSlots: refillSlots)
@@ -1353,7 +1462,7 @@ final class GameScene: SKScene {
         print("[RESOLVE] finish begin")
         validateFinalBoard()
 #endif
-        forcedEndInProgress = false
+        endTurnResolveGate.reset()
         turnController.prepareNextSession()
         gameState = .completed
         updateTimerUI()

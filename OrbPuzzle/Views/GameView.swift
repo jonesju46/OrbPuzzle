@@ -7,6 +7,7 @@ struct GameView: View {
     @AppStorage(GameSettings.noResolveDuringTurnKey) private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
     @AppStorage(GameSettings.skyfallComboCountKey) private var skyfallComboCount = GameSettings.defaultSkyfallComboCount
     @AppStorage(GameSettings.skyfallComboEnabledKey) private var skyfallComboEnabled = GameSettings.defaultSkyfallComboEnabled
+    @AppStorage(GameSettings.skyfallBonusEnabledKey) private var skyfallBonusEnabled = GameSettings.defaultSkyfallBonusEnabled
     @State private var scene = GameScene(size: CGSize(width: 390, height: 844))
     @State private var isShowingSettings = false
     @State private var isGameplayVisible = false
@@ -70,6 +71,7 @@ struct GameView: View {
         .onChange(of: noResolveDuringTurn) { _, _ in applySettings() }
         .onChange(of: skyfallComboCount) { _, _ in applySettings() }
         .onChange(of: skyfallComboEnabled) { _, _ in applySettings() }
+        .onChange(of: skyfallBonusEnabled) { _, _ in applySettings() }
         .onDisappear {
             // A sheet does not remove GameView. A real navigation departure does,
             // so the next Start Game appearance must create another session.
@@ -92,7 +94,8 @@ struct GameView: View {
             skyfallComboCount: GameSettings.effectiveSkyfallComboCount(
                 enabled: skyfallComboEnabled,
                 configured: skyfallComboCount
-            )
+            ),
+            skyfallBonusEnabled: skyfallBonusEnabled
         )
     }
 

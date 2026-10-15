@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 enum GameState: String, Equatable {
@@ -5,12 +6,109 @@ enum GameState: String, Equatable {
     case selected
     case turnActive
     case dragging
+    case awaitingResolveTap
     case resolving
     case removing
     case falling
     case refilling
     case skyfall
     case completed
+}
+
+enum TurnInteractionPolicy {
+    static func stateAfterGestureEnd(
+        hasValidSwap: Bool,
+        legacyNoResolveDuringTurn _: Bool = false
+    ) -> GameState {
+        hasValidSwap ? .awaitingResolveTap : .idle
+    }
+
+    static func shouldResolveFromBoardTap(state: GameState, isValidTap: Bool) -> Bool {
+        state == .awaitingResolveTap && isValidTap
+    }
+}
+
+/// Recognizes the separate, single-finger board tap that ends a moved turn.
+/// It deliberately rejects long presses, drags and multi-touch sequences.
+struct ResolveTapGate: Equatable {
+    static let maximumMovement: CGFloat = 12
+    static let maximumDuration: TimeInterval = 0.35
+
+    private(set) var isTracking = false
+    private var startPoint = CGPoint.zero
+    private var startTime: TimeInterval = 0
+    private var invalid = false
+
+    @discardableResult
+    mutating func begin(
+        at point: CGPoint,
+        timestamp: TimeInterval,
+        touchCount: Int,
+        isInsideBoard: Bool
+    ) -> Bool {
+        cancel()
+        guard touchCount == 1, isInsideBoard else { return false }
+        isTracking = true
+        startPoint = point
+        startTime = timestamp
+        return true
+    }
+
+    mutating func move(to point: CGPoint, touchCount: Int) {
+        guard isTracking else { return }
+        if touchCount != 1 || distance(from: startPoint, to: point) > Self.maximumMovement {
+            invalid = true
+        }
+    }
+
+    mutating func invalidate() {
+        if isTracking { invalid = true }
+    }
+
+    mutating func end(
+        at point: CGPoint,
+        timestamp: TimeInterval,
+        touchCount: Int,
+        isInsideBoard: Bool
+    ) -> Bool {
+        guard isTracking else { return false }
+        let isTap = !invalid
+            && touchCount == 1
+            && isInsideBoard
+            && timestamp >= startTime
+            && timestamp - startTime <= Self.maximumDuration
+            && distance(from: startPoint, to: point) <= Self.maximumMovement
+        cancel()
+        return isTap
+    }
+
+    mutating func cancel() {
+        isTracking = false
+        startPoint = .zero
+        startTime = 0
+        invalid = false
+    }
+
+    private func distance(from start: CGPoint, to end: CGPoint) -> CGFloat {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        return (dx * dx + dy * dy).squareRoot()
+    }
+}
+
+/// Exactly-once entrance shared by timer expiry and the explicit resolve tap.
+struct EndTurnResolveGate: Equatable {
+    private(set) var isResolving = false
+
+    mutating func begin() -> Bool {
+        guard !isResolving else { return false }
+        isResolving = true
+        return true
+    }
+
+    mutating func reset() {
+        isResolving = false
+    }
 }
 
 /// Monotonically identifies the currently active game. Delayed work captures an
@@ -36,6 +134,7 @@ struct GameSessionSnapshot: Equatable {
     let comboCount: Int
     let generatedSkyfall: Int
     let requestedSkyfall: Int
+    let skyfallBonusEnabled: Bool
     let remainingTime: TimeInterval
     let progress: Double
     let resolveID: UInt

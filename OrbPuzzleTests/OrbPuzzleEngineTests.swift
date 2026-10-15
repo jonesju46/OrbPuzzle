@@ -2291,7 +2291,144 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertFalse(GameSettings.defaultTurnTimeEnabled)
         XCTAssertFalse(GameSettings.defaultNoResolveDuringTurn)
         XCTAssertFalse(GameSettings.defaultSkyfallComboEnabled)
+        XCTAssertTrue(GameSettings.defaultSkyfallBonusEnabled)
         XCTAssertEqual(GameSettings.skyfallComboCountRange, 1...99)
+    }
+
+    func testSkyfallBonusSettingPersistsWithItsOwnKey() {
+        let suiteName = "OrbPuzzleTests.SkyfallBonus.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Expected isolated UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        XCTAssertNil(defaults.object(forKey: GameSettings.skyfallBonusEnabledKey))
+        XCTAssertTrue(GameSettings.defaultSkyfallBonusEnabled)
+        defaults.set(false, forKey: GameSettings.skyfallBonusEnabledKey)
+        XCTAssertFalse(defaults.bool(forKey: GameSettings.skyfallBonusEnabledKey))
+        defaults.set(true, forKey: GameSettings.skyfallBonusEnabledKey)
+        XCTAssertTrue(defaults.bool(forKey: GameSettings.skyfallBonusEnabledKey))
+    }
+
+    func testSkyfallBonusPolicyKeepsExactTargetAndSeparatesFriendlyFromNatural() {
+        XCTAssertEqual(
+            SkyfallBonusPolicy.refillMode(hasControlledTarget: true, bonusEnabled: true),
+            .controlledExactTarget
+        )
+        XCTAssertEqual(
+            SkyfallBonusPolicy.refillMode(hasControlledTarget: true, bonusEnabled: false),
+            .controlledExactTarget
+        )
+        XCTAssertEqual(
+            SkyfallBonusPolicy.refillMode(hasControlledTarget: false, bonusEnabled: true),
+            .friendlyBonus
+        )
+        XCTAssertEqual(
+            SkyfallBonusPolicy.refillMode(hasControlledTarget: false, bonusEnabled: false),
+            .naturalRandom
+        )
+    }
+
+    func testTurnReleaseAlwaysWaitsForSeparateTapAfterAValidSwap() {
+        for legacyNoResolveSetting in [false, true] {
+            XCTAssertEqual(
+                TurnInteractionPolicy.stateAfterGestureEnd(
+                    hasValidSwap: true,
+                    legacyNoResolveDuringTurn: legacyNoResolveSetting
+                ),
+                .awaitingResolveTap
+            )
+        }
+        XCTAssertEqual(
+            TurnInteractionPolicy.stateAfterGestureEnd(hasValidSwap: false),
+            .idle
+        )
+        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromBoardTap(
+            state: .idle, isValidTap: true))
+        XCTAssertFalse(TurnInteractionPolicy.shouldResolveFromBoardTap(
+            state: .resolving, isValidTap: true))
+        XCTAssertTrue(TurnInteractionPolicy.shouldResolveFromBoardTap(
+            state: .awaitingResolveTap, isValidTap: true))
+    }
+
+    func testResolveTapGateAcceptsOnlyASeparateQuickStationaryBoardTap() {
+        var gate = ResolveTapGate()
+        let point = CGPoint(x: 123.5, y: 456.5)
+
+        XCTAssertTrue(gate.begin(
+            at: point, timestamp: 10, touchCount: 1, isInsideBoard: true))
+        XCTAssertTrue(gate.end(
+            at: CGPoint(x: 126, y: 458), timestamp: 10.20,
+            touchCount: 1, isInsideBoard: true))
+        XCTAssertFalse(gate.isTracking)
+    }
+
+    func testResolveTapGateRejectsDragLongPressOutsideAndMultiTouch() {
+        var gate = ResolveTapGate()
+        let point = CGPoint(x: 100, y: 100)
+
+        XCTAssertTrue(gate.begin(
+            at: point, timestamp: 1, touchCount: 1, isInsideBoard: true))
+        gate.move(to: CGPoint(x: 130, y: 100), touchCount: 1)
+        XCTAssertFalse(gate.end(
+            at: CGPoint(x: 130, y: 100), timestamp: 1.1,
+            touchCount: 1, isInsideBoard: true))
+
+        XCTAssertTrue(gate.begin(
+            at: point, timestamp: 2, touchCount: 1, isInsideBoard: true))
+        XCTAssertFalse(gate.end(
+            at: point, timestamp: 2 + ResolveTapGate.maximumDuration + 0.01,
+            touchCount: 1, isInsideBoard: true))
+
+        XCTAssertFalse(gate.begin(
+            at: point, timestamp: 3, touchCount: 1, isInsideBoard: false))
+        XCTAssertFalse(gate.begin(
+            at: point, timestamp: 4, touchCount: 2, isInsideBoard: true))
+    }
+
+    func testTapAndTimerShareAnExactlyOnceResolveGate() {
+        var gate = EndTurnResolveGate()
+        XCTAssertTrue(gate.begin())
+        XCTAssertFalse(gate.begin())
+        gate.reset()
+        XCTAssertTrue(gate.begin())
+    }
+
+    func testAwaitingResolveTapKeepsFiveAndNinetyNineSecondTimersRunning() {
+        for duration in [5.0, 99.0] {
+            let timer = TurnController(duration: duration)
+            timer.select(
+                orbID: UUID(),
+                at: GridPosition(row: 0, column: 0),
+                touchPosition: .zero
+            )
+            timer.beginTiming(at: 100)
+            timer.endGesture()
+
+            XCTAssertEqual(
+                TurnInteractionPolicy.stateAfterGestureEnd(hasValidSwap: timer.isTiming),
+                .awaitingResolveTap
+            )
+            XCTAssertFalse(timer.update(at: 100 + duration - 0.1))
+            XCTAssertEqual(timer.remainingTime, 0.1, accuracy: 0.001)
+            XCTAssertTrue(timer.update(at: 100 + duration))
+            timer.expireSession()
+            XCTAssertFalse(timer.isTiming)
+            XCTAssertEqual(timer.remainingTime, 0, accuracy: 0.001)
+        }
+    }
+
+    func testNewGameResetCancelsPendingResolveTap() {
+        var gate = ResolveTapGate()
+        XCTAssertTrue(gate.begin(
+            at: CGPoint(x: 10, y: 10), timestamp: 1,
+            touchCount: 1, isInsideBoard: true))
+        gate.cancel()
+        XCTAssertFalse(gate.isTracking)
+        XCTAssertFalse(gate.end(
+            at: CGPoint(x: 10, y: 10), timestamp: 1.1,
+            touchCount: 1, isInsideBoard: true))
     }
 
     func testTurnTimeToggleUsesFiveWhenOffAndStoredValueWhenOn() {
@@ -2414,20 +2551,24 @@ final class OrbPuzzleEngineTests: XCTestCase {
         scene.configure(
             turnDuration: GameSettings.effectiveTurnDuration(enabled: false, configured: 30),
             noResolveDuringTurn: true,
-            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: false, configured: 19)
+            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: false, configured: 19),
+            skyfallBonusEnabled: false
         )
         scene.startNewGame()
         XCTAssertEqual(scene.sessionSnapshot.remainingTime, 5, accuracy: 0.001)
         XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 0)
+        XCTAssertFalse(scene.sessionSnapshot.skyfallBonusEnabled)
 
         scene.configure(
             turnDuration: GameSettings.effectiveTurnDuration(enabled: true, configured: 30),
             noResolveDuringTurn: true,
-            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: true, configured: 19)
+            skyfallComboCount: GameSettings.effectiveSkyfallComboCount(enabled: true, configured: 19),
+            skyfallBonusEnabled: true
         )
         scene.startNewGame()
         XCTAssertEqual(scene.sessionSnapshot.remainingTime, 30, accuracy: 0.001)
         XCTAssertEqual(scene.sessionSnapshot.requestedSkyfall, 19)
+        XCTAssertTrue(scene.sessionSnapshot.skyfallBonusEnabled)
     }
 
     func testBoardDimensionsAndInitialBoardHasNoMatch() {

@@ -527,6 +527,22 @@ enum FriendlyBoardAnalyzer {
 
 }
 
+enum SkyfallRefillMode: Equatable {
+    case controlledExactTarget
+    case friendlyBonus
+    case naturalRandom
+}
+
+enum SkyfallBonusPolicy {
+    /// Exact-target mode remains authoritative. The new bonus switch only
+    /// chooses between Friendly V4 and ordinary random refill when no exact
+    /// target is configured.
+    static func refillMode(hasControlledTarget: Bool, bonusEnabled: Bool) -> SkyfallRefillMode {
+        if hasControlledTarget { return .controlledExactTarget }
+        return bonusEnabled ? .friendlyBonus : .naturalRandom
+    }
+}
+
 /// Plans only the types for real empty refill slots. Existing Orb models are never
 /// replaced, so every skyfall cycle preserves all non-removed IDs and types.
 final class SkyfallController {

@@ -6,12 +6,14 @@ enum GameSettings {
     static let noResolveDuringTurnKey = "noResolveDuringTurn"
     static let skyfallComboCountKey = "skyfallComboCount"
     static let skyfallComboEnabledKey = "skyfallComboEnabled"
+    static let skyfallBonusEnabledKey = "skyfallBonusEnabled"
 
     static let defaultTurnDuration = 10.0
     static let defaultTurnTimeEnabled = false
     static let defaultNoResolveDuringTurn = false
     static let defaultSkyfallComboCount = 15
     static let defaultSkyfallComboEnabled = false
+    static let defaultSkyfallBonusEnabled = true
 
     static let turnDurationRange = 5.0...99.0
     static let skyfallComboCountRange = 1...99

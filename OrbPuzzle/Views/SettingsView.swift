@@ -15,6 +15,7 @@ struct SettingsView: View {
     @AppStorage(GameSettings.noResolveDuringTurnKey) private var noResolveDuringTurn = GameSettings.defaultNoResolveDuringTurn
     @AppStorage(GameSettings.skyfallComboCountKey) private var skyfallComboCount = GameSettings.defaultSkyfallComboCount
     @AppStorage(GameSettings.skyfallComboEnabledKey) private var skyfallComboEnabled = GameSettings.defaultSkyfallComboEnabled
+    @AppStorage(GameSettings.skyfallBonusEnabledKey) private var skyfallBonusEnabled = GameSettings.defaultSkyfallBonusEnabled
 
     @AppStorage(GameSettings.playerMaxHPKey) private var playerMaxHP = GameSettings.defaultPlayerMaxHP
     @AppStorage(GameSettings.monsterHPKey) private var monsterHP = GameSettings.defaultMonsterHP
@@ -76,9 +77,7 @@ struct SettingsView: View {
 
         Section("Turn Resolution") {
             Toggle("No Resolve During Turn", isOn: $noResolveDuringTurn)
-            Text(noResolveDuringTurn
-                 ? "Finger-up keeps the board and timer active. Resolution starts at zero."
-                 : "Finger-up resolves immediately after the first valid move.")
+            Text("After a valid drag, finger-up always keeps the board and timer active. Tap the board to resolve early, or wait for zero. This stored setting no longer restores finger-up resolution.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -97,6 +96,15 @@ struct SettingsView: View {
             Text(skyfallComboEnabled
                  ? "This is the exact number of additional match groups generated after the initial matches."
                  : "Controlled skyfall is off. Natural matches still resolve normally.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        Section("Skyfall Bonus") {
+            Toggle("Skyfall Bonus", isOn: $skyfallBonusEnabled)
+            Text(skyfallBonusEnabled
+                 ? "When exact Skyfall Combo is off, Friendly V4 plans bonus refills."
+                 : "When exact Skyfall Combo is off, refill is fully random; natural matches still cascade.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
