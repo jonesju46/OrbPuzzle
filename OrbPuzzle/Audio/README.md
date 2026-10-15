@@ -4,12 +4,17 @@ The app ships real recordings rather than generated waveforms. Full provenance,
 source URLs, licenses, hashes, and processing details are in
 [AUDIO_SOURCES.md](AUDIO_SOURCES.md).
 
-## Combo soap bubble
+## Combo xylophone dyad
 
-- `combo_soap_bubble.wav` is a 0.30-second excerpt of a CC0 physical bubble-bath recording by Freesound user **danieldouch**.
+- `combo_xylophone_A6_A9.wav` is based on two real University of Iowa xylophone recordings made with hard-rubber mallets: C5 and C8, three octaves apart.
+- The selected in-game sound shifts that recorded dyad up 21 semitones to A6 + A9 while retaining the three-octave interval. It is processed real-instrument audio, not an oscillator, MIDI render, or synthesized replacement.
 - Every successfully resolved normalized Match Group requests this one sound once. Manual and Skyfall groups share the same mapping.
 - The file is preloaded into a bounded four-voice pool. A request is dropped if all four attacks are still active; gameplay never waits for audio and no player is allocated during Resolve.
-- Final format is mono PCM signed 16-bit WAV at 44.1 kHz. It has a short fade-in/out and no pitch change or synthesized layer.
+- Final format is stereo PCM signed 16-bit WAV at 44.1 kHz, approximately 0.80 seconds.
+
+## Retained soap-bubble recording
+
+- `combo_soap_bubble.wav` remains bundled for provenance and rollback, but Combo playback no longer loads or plays it.
 
 ## Retained piano recordings
 

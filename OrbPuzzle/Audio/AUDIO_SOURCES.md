@@ -1,6 +1,29 @@
 # Audio sources and provenance
 
-Access and license verification date: **2026-10-14**
+Access and license verification date: **2026-10-15**
+
+## Combo xylophone dyad
+
+| Field | Value |
+| --- | --- |
+| Asset | `combo_xylophone_A6_A9.wav` |
+| Original Title | Xylophone — hard rubber mallets, mezzo-forte |
+| Performer | Andrew Thierauf |
+| Collection | University of Iowa Musical Instrument Samples |
+| Original URL | https://theremin.music.uiowa.edu/MISxylophone.html |
+| C5–B5 Direct Download | https://theremin.music.uiowa.edu/sound%20files/MIS/Percussion/Xylophone/xylophone.hardrubber.mf.C5B5.aif |
+| C8 Direct Download | https://theremin.music.uiowa.edu/sound%20files/MIS/Percussion/Xylophone/xylophone.hardrubber.mf.C8.aif |
+| C5–B5 Source SHA-256 | `5C4B667C35EA9F787B3D6E4FF3C2375C19F99593F8518F00564E8215B12CF2AA` |
+| C8 Source SHA-256 | `348BF65F366BF3B1866C555E8AACAAAA1FE00F6AE1E73AF0438F354ECB0A35AA` |
+| Final Asset SHA-256 | `2B3FB296F0FB80F93A07D17BAEC3B25EBF5F5FF21737D4FF254BE244CA47A51D` |
+| Usage Permission | University of Iowa MIS unrestricted project-use statement |
+| Permission URL | https://theremin.music.uiowa.edu/MIS.html |
+| Access Date | 2026-10-15 |
+| Recording Type | Real acoustic xylophone recorded in the University of Iowa anechoic chamber on 2013-06-10 with an Earthworks QTC40 microphone and Metric Halo 2882 interface; original files are stereo, 24-bit, 44.1 kHz. |
+| Processing | Extracted the directly recorded C5 from the C5–B5 chromatic file and the directly recorded C8 single note; aligned their attacks; applied +18 dB and +12 dB gain respectively; mixed, limited and faded the three-octave dyad. The accepted preview then shifts the complete dyad up 21 semitones to A6 + A9 using sample-rate conversion with tempo compensation. Final output is stereo PCM signed 16-bit WAV at 44.1 kHz, approximately 0.80 seconds. |
+| Synthesis Disclosure | No oscillator, synthesizer, MIDI instrument, or generated waveform is used. A6 and A9 are pitch-shifted from the real C5 and C8 recordings and are not claimed as directly recorded A pitches. |
+| Redistribution | **Confirmed for this repository.** The collection's official usage page permits downloaded samples to be used in projects without restrictions. |
+| Verification | **Confirmed real recording and documented processing.** Selected by the user after listening to the exact final WAV. iPhone playback remains unverified on Windows. |
 
 ## Combo soap-bubble Foley
 

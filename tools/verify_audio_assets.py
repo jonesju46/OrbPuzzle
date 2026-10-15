@@ -19,6 +19,7 @@ NOTES = [
 
 EXPECTED_SHA256 = {
     "combo_soap_bubble.wav": "b54f36068eb9c3d46ee0fae488dd151f5c4ef97f9832c5f87a4639c206f129fb",
+    "combo_xylophone_A6_A9.wav": "2b3fb296f0fb80f93a07d17baec3b25ebf5f5ff21737d4ff254be244ca47a51d",
 }
 
 
@@ -30,7 +31,8 @@ def inspect(path: Path) -> dict[str, int | float | str]:
         frame_count = source.getnframes()
         frames = source.readframes(frame_count)
 
-    if channels != 1 or sample_width != 2 or sample_rate != 44_100:
+    expected_channels = 2 if path.name == "combo_xylophone_A6_A9.wav" else 1
+    if channels != expected_channels or sample_width != 2 or sample_rate != 44_100:
         raise AssertionError(f"Unexpected PCM format: {path}")
     samples = array("h")
     samples.frombytes(frames)
@@ -54,7 +56,11 @@ def inspect(path: Path) -> dict[str, int | float | str]:
     duration = frame_count / sample_rate
     if path.name == "combo_soap_bubble.wav" and not 0.15 <= duration <= 0.35:
         raise AssertionError(f"Unexpected soap-bubble duration: {path} ({duration})")
-    if path.name.startswith("combo_") and path.name != "combo_soap_bubble.wav" and abs(duration - 1.8) > 0.01:
+    if path.name == "combo_xylophone_A6_A9.wav" and not 0.75 <= duration <= 0.85:
+        raise AssertionError(f"Unexpected xylophone duration: {path} ({duration})")
+    if path.name.startswith("combo_") and path.name not in {
+        "combo_soap_bubble.wav", "combo_xylophone_A6_A9.wav"
+    } and abs(duration - 1.8) > 0.01:
         raise AssertionError(f"Unexpected piano duration: {path} ({duration})")
     if path.name == "orb_glass_swap.wav" and not 0.14 <= duration <= 0.175:
         raise AssertionError(f"Unexpected glass duration: {path} ({duration})")
@@ -84,6 +90,7 @@ def main() -> int:
     audio_dir = root / "OrbPuzzle" / "Audio"
     expected = [audio_dir / f"combo_{note}.wav" for note in NOTES]
     expected.append(audio_dir / "combo_soap_bubble.wav")
+    expected.append(audio_dir / "combo_xylophone_A6_A9.wav")
     expected.append(audio_dir / "orb_glass_swap.wav")
     missing = [str(path) for path in expected if not path.is_file()]
     if missing:

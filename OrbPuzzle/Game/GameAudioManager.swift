@@ -11,7 +11,7 @@ enum RecordedPianoAssets {
 }
 
 enum ComboSoundPolicy {
-    static let resourceName = "combo_soap_bubble"
+    static let resourceName = "combo_xylophone_A6_A9"
     static let fileExtension = "wav"
 
     static func resourceName(for comboNumber: Int) -> String? {
@@ -213,7 +213,7 @@ enum GlassSwapSoundPolicy {
     }
 }
 
-/// Preloads the fixed Combo Foley and glass-swap PCM resources into retained
+/// Preloads the fixed Combo xylophone dyad and glass-swap PCM resources into retained
 /// player pools. Resolution
 /// never reads disk or creates players at the moment a combo starts removing.
 final class GameAudioManager: NSObject, AVAudioPlayerDelegate {

@@ -441,16 +441,16 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(config.cards.count, 5)
     }
 
-    func testEveryPositiveComboUsesSoapBubbleResource() {
+    func testEveryPositiveComboUsesXylophoneDyadResource() {
         for comboNumber in [1, 2, 10, 21, 22, 50, 99] {
             XCTAssertEqual(ComboSoundPolicy.resourceName(for: comboNumber),
-                           "combo_soap_bubble")
+                           "combo_xylophone_A6_A9")
         }
         XCTAssertNil(ComboSoundPolicy.resourceName(for: 0))
         XCTAssertNil(ComboSoundPolicy.resourceName(for: -1))
     }
 
-    func testManualAndSkyfallUseTheSameSoapBubbleResource() {
+    func testManualAndSkyfallUseTheSameXylophoneDyadResource() {
         let controller = ComboController()
         var resources: [String] = []
 
@@ -463,7 +463,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
             resources.append(ComboSoundPolicy.resourceName(for: comboNumber)!)
         }
 
-        XCTAssertEqual(resources, Array(repeating: "combo_soap_bubble", count: 8))
+        XCTAssertEqual(resources, Array(repeating: "combo_xylophone_A6_A9", count: 8))
         XCTAssertEqual(controller.comboCount, 8)
     }
 
@@ -486,7 +486,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
 
         XCTAssertEqual(removalGroups.count, waterGroups.count)
-        XCTAssertEqual(resources, ["combo_soap_bubble", "combo_soap_bubble"])
+        XCTAssertEqual(resources, ["combo_xylophone_A6_A9", "combo_xylophone_A6_A9"])
         XCTAssertEqual(controller.manualComboByType[.water], 2)
     }
 
@@ -503,7 +503,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         }
 
         XCTAssertEqual(matches.count, 1)
-        XCTAssertEqual(resources, ["combo_soap_bubble"])
+        XCTAssertEqual(resources, ["combo_xylophone_A6_A9"])
     }
 
     func testMissingComboSoundAssetFailsSafely() {
@@ -513,13 +513,13 @@ final class OrbPuzzleEngineTests: XCTestCase {
             return nil
         }
         XCTAssertFalse(audioManager.playComboSound(comboNumber: 5))
-        XCTAssertTrue(requested.contains("combo_soap_bubble.wav"))
+        XCTAssertTrue(requested.contains("combo_xylophone_A6_A9.wav"))
     }
 
     func testRecordedPianoAssetsRemainBundledButAreNotComboPlaybackResources() {
         XCTAssertEqual(RecordedPianoAssets.notes.count, 21)
-        XCTAssertFalse(RecordedPianoAssets.notes.contains("soap_bubble"))
-        XCTAssertEqual(ComboSoundPolicy.resourceName, "combo_soap_bubble")
+        XCTAssertFalse(RecordedPianoAssets.notes.contains("xylophone_A6_A9"))
+        XCTAssertEqual(ComboSoundPolicy.resourceName, "combo_xylophone_A6_A9")
     }
 
     func testRecordedAudioResourcesExistAndDecodeInAppBundle() throws {
@@ -535,16 +535,17 @@ final class OrbPuzzleEngineTests: XCTestCase {
             XCTAssertEqual(file.fileFormat.channelCount, 1)
             XCTAssertEqual(file.fileFormat.commonFormat, .pcmFormatInt16)
         }
-        let bubbleURL = try XCTUnwrap(bundle.url(
+        let xylophoneURL = try XCTUnwrap(bundle.url(
             forResource: ComboSoundPolicy.resourceName, withExtension: "wav"))
-        let bubblePlayer = try AVAudioPlayer(contentsOf: bubbleURL)
-        XCTAssertGreaterThanOrEqual(bubblePlayer.duration, 0.150)
-        XCTAssertLessThanOrEqual(bubblePlayer.duration, 0.350)
-        XCTAssertEqual(bubblePlayer.numberOfChannels, 1)
-        let bubbleFile = try AVAudioFile(forReading: bubbleURL)
-        XCTAssertEqual(bubbleFile.fileFormat.sampleRate, 44_100, accuracy: 0.5)
-        XCTAssertEqual(bubbleFile.fileFormat.channelCount, 1)
-        XCTAssertEqual(bubbleFile.fileFormat.commonFormat, .pcmFormatInt16)
+        let xylophonePlayer = try AVAudioPlayer(contentsOf: xylophoneURL)
+        XCTAssertGreaterThanOrEqual(xylophonePlayer.duration, 0.750)
+        XCTAssertLessThanOrEqual(xylophonePlayer.duration, 0.850)
+        XCTAssertEqual(xylophonePlayer.numberOfChannels, 2)
+        XCTAssertGreaterThan(try Data(contentsOf: xylophoneURL).count, 100_000)
+        let xylophoneFile = try AVAudioFile(forReading: xylophoneURL)
+        XCTAssertEqual(xylophoneFile.fileFormat.sampleRate, 44_100, accuracy: 0.5)
+        XCTAssertEqual(xylophoneFile.fileFormat.channelCount, 2)
+        XCTAssertEqual(xylophoneFile.fileFormat.commonFormat, .pcmFormatInt16)
 
         let glassURL = try XCTUnwrap(bundle.url(forResource: "orb_glass_swap", withExtension: "wav"))
         let glassPlayer = try AVAudioPlayer(contentsOf: glassURL)
@@ -565,12 +566,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
         manager.preload()
         _ = manager.playComboSound(comboNumber: 1)
         XCTAssertEqual(requests.count, 2)
-        XCTAssertEqual(Set(requests), Set(["combo_soap_bubble", "orb_glass_swap"]))
+        XCTAssertEqual(Set(requests), Set(["combo_xylophone_A6_A9", "orb_glass_swap"]))
         XCTAssertEqual(GameAudioManager.comboVoiceCount, 4)
         XCTAssertEqual(GameAudioManager.glassVoiceCount, 4)
     }
 
-    func testSoapBubbleVoicePoolIsBoundedAndDropsWhenAllVoicesAreBusy() {
+    func testXylophoneVoicePoolIsBoundedAndDropsWhenAllVoicesAreBusy() {
         let partlyBusy = [true, false, true, false]
         let allBusy = Array(repeating: true, count: ComboVoicePoolPolicy.voiceLimit)
         XCTAssertEqual(ComboVoicePoolPolicy.voiceLimit, 4)
@@ -595,7 +596,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertNil(availableVoice)
         XCTAssertEqual(controller.comboCount, 99)
         XCTAssertEqual(ComboSoundPolicy.resourceName(for: controller.comboCount),
-                       "combo_soap_bubble")
+                       "combo_xylophone_A6_A9")
     }
 
     func testMatchPreviewAndFriendlyPlanningDoNotRequestAudioResources() {
@@ -683,7 +684,7 @@ final class OrbPuzzleEngineTests: XCTestCase {
         XCTAssertEqual(label.text, OrbType.fire.hebrewLabel)
     }
 
-    func testNewTurnKeepsTheSameSoapBubbleMapping() {
+    func testNewTurnKeepsTheSameXylophoneMapping() {
         let controller = ComboController()
         var lastResource = ""
 
@@ -691,12 +692,12 @@ final class OrbPuzzleEngineTests: XCTestCase {
             let comboNumber = controller.add(type: .heart, groups: 1, source: .skyfall)
             lastResource = ComboSoundPolicy.resourceName(for: comboNumber) ?? ""
         }
-        XCTAssertEqual(lastResource, "combo_soap_bubble")
+        XCTAssertEqual(lastResource, "combo_xylophone_A6_A9")
 
         controller.reset()
         let firstCombo = controller.add(type: .heart, groups: 1, source: .manual)
         XCTAssertEqual(ComboSoundPolicy.resourceName(for: firstCombo),
-                       "combo_soap_bubble")
+                       "combo_xylophone_A6_A9")
     }
 
     func testNewGameCreatesThirtyNewOrbIDsAndResetsTransientState() {
